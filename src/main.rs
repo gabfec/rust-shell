@@ -9,6 +9,9 @@ fn main() {
         // Wait for user input
         let mut command = String::new();
         io::stdin().read_line(&mut command).unwrap();
-        println!("{}: command not found", command.trim());
+        match command.trim() {
+            "exit" => break,
+            _ => println!("{}: command not found", command.trim()),
+        }
     }
 }
