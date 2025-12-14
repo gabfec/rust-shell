@@ -3,6 +3,7 @@ use std::io::{self, Write};
 use std::env;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
+use std::process::Command;
 
 const SHELL_BUILTINS: &[&str] = &["exit", "echo", "type"];
 
@@ -43,13 +44,13 @@ fn main() {
         // Wait for user input
         let mut command = String::new();
         io::stdin().read_line(&mut command).unwrap();
-        let cmd = command.trim().split(' ').collect::<Vec<&str>>();
-        let args = cmd[1..].to_vec();
-        match cmd[0] {
+        let argv: Vec<&str> = command.trim().split(' ').collect();
+        let args = &argv[1..];
+        match argv[0] {
             "exit" => break,
             "echo" => println!("{}", args.join(" ") ),
             "type" => {
-                let Some(query) = cmd.get(1).copied() else {
+                let Some(query) = args.get(0).copied() else {
                     continue;
                 };
 
@@ -61,7 +62,14 @@ fn main() {
                     println!("{}: not found", query);
                 }
             },
-            _ => println!("{}: command not found", command.trim()),
+            _ =>  match find_in_path(argv[0]) {
+                    Some(_) => {
+                        Command::new(argv[0])
+                            .args(args)
+                            .status().unwrap();
+                    },
+                    None => { println!("{}: not found", argv[0])}
+                }
         }
     }
 }
