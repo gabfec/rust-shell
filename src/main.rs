@@ -5,7 +5,7 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 
-const SHELL_BUILTINS: &[&str] = &["exit", "echo", "type"];
+const SHELL_BUILTINS: &[&str] = &["exit", "echo", "type", "pwd"];
 
 fn is_executable(path: &std::path::Path) -> bool {
     if let Ok(metadata) = fs::metadata(path) {
@@ -62,6 +62,7 @@ fn main() {
                     println!("{}: not found", query);
                 }
             },
+            "pwd" => {println!("{}", env::current_dir().unwrap().display())},
             _ =>  match find_in_path(argv[0]) {
                     Some(_) => {
                         Command::new(argv[0])
