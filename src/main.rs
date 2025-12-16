@@ -1,11 +1,12 @@
 #[allow(unused_imports)]
 use std::io::{self, Write};
 use std::env;
+use std::error::Error;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 
-const SHELL_BUILTINS: &[&str] = &["exit", "echo", "type", "pwd"];
+const SHELL_BUILTINS: &[&str] = &["exit", "echo", "type", "pwd", "cd"];
 
 fn is_executable(path: &std::path::Path) -> bool {
     if let Ok(metadata) = fs::metadata(path) {
@@ -63,6 +64,15 @@ fn main() {
                 }
             },
             "pwd" => {println!("{}", env::current_dir().unwrap().display())},
+            "cd" => {
+                let Some(path) = args.get(0).copied() else {
+                    continue;
+                };
+                match env::set_current_dir(path) {
+                    Ok(_) => {},
+                    Err(e) => println!("cd: {}: {}",path, "No such file or directory")
+                }
+            }
             _ =>  match find_in_path(argv[0]) {
                     Some(_) => {
                         Command::new(argv[0])
