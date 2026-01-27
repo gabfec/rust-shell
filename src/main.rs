@@ -35,14 +35,18 @@ fn tokenize(input: &str) -> Vec<String> {
     let mut tokens = Vec::new();
     let mut current = String::new();
     let mut inside_single_quote = false;
+    let mut inside_double_quote = false;
 
     for c in input.chars() {
         match c {
-            '\'' => {
+            '\'' if !inside_double_quote => {
                 inside_single_quote = !inside_single_quote;
                 // Note: We don't push the quote itself to the token
             }
-            ' ' if !inside_single_quote => {
+            '"' if !inside_single_quote => {
+                inside_double_quote = !inside_double_quote;
+            }
+            ' ' if !inside_single_quote && !inside_double_quote => {
                 if !current.is_empty() {
                     tokens.push(current.clone());
                     current.clear();
