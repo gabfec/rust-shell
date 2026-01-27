@@ -37,7 +37,9 @@ fn tokenize(input: &str) -> Vec<String> {
     let mut inside_single_quote = false;
     let mut inside_double_quote = false;
 
-    for c in input.chars() {
+    let mut chars = input.chars().peekable();
+
+    while let Some(c) = chars.next() {
         match c {
             '\'' if !inside_double_quote => {
                 inside_single_quote = !inside_single_quote;
@@ -45,6 +47,21 @@ fn tokenize(input: &str) -> Vec<String> {
             }
             '"' if !inside_single_quote => {
                 inside_double_quote = !inside_double_quote;
+            }
+            '\\' if !inside_single_quote => {
+                if let Some(&next_c) = chars.peek() {
+                    if inside_double_quote {
+                        // Inside double quotes, only specific chars are escaped
+                        if next_c == '\\' || next_c == '"' || next_c == '$' || next_c == '\n' {
+                            current.push(chars.next().unwrap());
+                        } else {
+                            current.push('\\');
+                        }
+                    } else {
+                        // Outside quotes, backslash escapes the very next char
+                        current.push(chars.next().unwrap());
+                    }
+                }
             }
             ' ' if !inside_single_quote && !inside_double_quote => {
                 if !current.is_empty() {
