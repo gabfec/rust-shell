@@ -3,7 +3,7 @@ use std::fs;
 #[allow(unused_imports)]
 use std::io::{self, Write};
 use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 const SHELL_BUILTINS: &[&str] = &["exit", "echo", "type", "pwd", "cd"];
@@ -23,18 +23,41 @@ fn find_in_path(command: &str) -> Option<String> {
 
     for dir in env::split_paths(&path_os) {
         let candidate = dir.join(command);
-
-        // If the file exists but lacks execute permissions, skip it and continue.
-        if candidate.exists() && !is_executable(&candidate) {
-            continue;
-        }
-
-        if is_executable(&candidate) {
+        if candidate.exists() && is_executable(&candidate) {
             return Some(candidate.to_string_lossy().into_owned());
         }
     }
-
     None
+}
+
+/// Replaces the manual char loop and .split(' ')
+fn tokenize(input: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut inside_single_quote = false;
+
+    for c in input.chars() {
+        match c {
+            '\'' => {
+                inside_single_quote = !inside_single_quote;
+                // Note: We don't push the quote itself to the token
+            }
+            ' ' if !inside_single_quote => {
+                if !current.is_empty() {
+                    tokens.push(current.clone());
+                    current.clear();
+                }
+            }
+            _ => {
+                current.push(c);
+            }
+        }
+    }
+
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+    tokens
 }
 
 fn main() {
@@ -42,21 +65,29 @@ fn main() {
         print!("$ ");
         io::stdout().flush().unwrap();
 
-        // Wait for user input
-        let mut command = String::new();
-        io::stdin().read_line(&mut command).unwrap();
-        let argv: Vec<&str> = command.trim().split(' ').collect();
+        let mut input = String::new();
+        io::stdin().read_line(&mut input).unwrap();
+        let input = input.trim();
+
+        if input.is_empty() {
+            continue;
+        }
+
+        // Use the tokenizer instead of split(' ')
+        let argv = tokenize(input);
+        let command = &argv[0];
         let args = &argv[1..];
-        match argv[0] {
+
+        match command.as_str() {
             "exit" => break,
             "echo" => println!("{}", args.join(" ")),
             "type" => {
-                let Some(query) = args.get(0).copied() else {
+                let Some(query) = args.get(0) else {
                     continue;
                 };
 
-                if SHELL_BUILTINS.contains(&query) {
-                    println!("{} is a shell builtin", &query);
+                if SHELL_BUILTINS.contains(&query.as_str()) {
+                    println!("{} is a shell builtin", query);
                 } else if let Some(full_path) = find_in_path(query) {
                     println!("{} is {}", query, full_path);
                 } else {
@@ -68,28 +99,28 @@ fn main() {
             }
             "cd" => {
                 let home_dir = env::var("HOME").unwrap();
-                let path = match args.get(0).copied() {
-                    None => Path::new(&home_dir).to_path_buf(),
+                let path = match args.get(0) {
+                    None => PathBuf::from(&home_dir),
                     Some(raw_arg) => {
                         if let Some(rest) = raw_arg.strip_prefix('~') {
                             Path::new(&home_dir).join(rest)
                         } else {
-                            Path::new(raw_arg).to_path_buf()
+                            PathBuf::from(raw_arg)
                         }
                     }
                 };
 
                 if let Err(_) = env::set_current_dir(&path) {
-                    let display_path = args.get(0).copied().unwrap_or("~");
-                    println!("cd: {}: {}", display_path, "No such file or directory");
+                    let display_path = args.get(0).map(|s| s.as_str()).unwrap_or("~");
+                    println!("cd: {}: No such file or directory", display_path);
                 }
             }
-            _ => match find_in_path(argv[0]) {
+            _ => match find_in_path(command) {
                 Some(_) => {
-                    Command::new(argv[0]).args(args).status().unwrap();
+                    Command::new(command).args(args).status().unwrap();
                 }
                 None => {
-                    println!("{}: not found", argv[0])
+                    println!("{}: not found", command)
                 }
             },
         }
