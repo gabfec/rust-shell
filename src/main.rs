@@ -1,7 +1,7 @@
-#[allow(unused_imports)]
-use std::io::{self, Write};
 use std::env;
 use std::fs;
+#[allow(unused_imports)]
+use std::io::{self, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::Command;
@@ -10,7 +10,7 @@ const SHELL_BUILTINS: &[&str] = &["exit", "echo", "type", "pwd", "cd"];
 
 fn is_executable(path: &std::path::Path) -> bool {
     if let Ok(metadata) = fs::metadata(path) {
-       return metadata.permissions().mode() & 0o111 != 0;
+        return metadata.permissions().mode() & 0o111 != 0;
     }
 
     false
@@ -49,21 +49,23 @@ fn main() {
         let args = &argv[1..];
         match argv[0] {
             "exit" => break,
-            "echo" => println!("{}", args.join(" ") ),
+            "echo" => println!("{}", args.join(" ")),
             "type" => {
                 let Some(query) = args.get(0).copied() else {
                     continue;
                 };
 
-                if SHELL_BUILTINS.contains(&query)  {
+                if SHELL_BUILTINS.contains(&query) {
                     println!("{} is a shell builtin", &query);
                 } else if let Some(full_path) = find_in_path(query) {
                     println!("{} is {}", query, full_path);
                 } else {
                     println!("{}: not found", query);
                 }
-            },
-            "pwd" => {println!("{}", env::current_dir().unwrap().display())},
+            }
+            "pwd" => {
+                println!("{}", env::current_dir().unwrap().display())
+            }
             "cd" => {
                 let home_dir = env::var("HOME").unwrap();
                 let path = match args.get(0).copied() {
@@ -82,14 +84,14 @@ fn main() {
                     println!("cd: {}: {}", display_path, "No such file or directory");
                 }
             }
-            _ =>  match find_in_path(argv[0]) {
-                    Some(_) => {
-                        Command::new(argv[0])
-                            .args(args)
-                            .status().unwrap();
-                    },
-                    None => { println!("{}: not found", argv[0])}
+            _ => match find_in_path(argv[0]) {
+                Some(_) => {
+                    Command::new(argv[0]).args(args).status().unwrap();
                 }
+                None => {
+                    println!("{}: not found", argv[0])
+                }
+            },
         }
     }
 }
