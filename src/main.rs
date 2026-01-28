@@ -93,16 +93,30 @@ impl CommandContext {
         let mut final_argv = Vec::new();
         let mut stdout_path = None;
         let mut stderr_path = None;
+        let mut append_stdout = false;
+        let mut append_stderr = false;
 
         let mut i = 0;
         while i < tokens.len() {
             match tokens[i].as_str() {
                 ">" | "1>" => {
                     stdout_path = tokens.get(i + 1).cloned();
+                    append_stdout = false;
+                    i += 2;
+                }
+                ">>" | "1>>" => {
+                    stdout_path = tokens.get(i + 1).cloned();
+                    append_stdout = true;
                     i += 2;
                 }
                 "2>" => {
                     stderr_path = tokens.get(i + 1).cloned();
+                    append_stderr = false;
+                    i += 2;
+                }
+                "2>>" => {
+                    stderr_path = tokens.get(i + 1).cloned();
+                    append_stderr = true;
                     i += 2;
                 }
                 _ => {
@@ -112,20 +126,20 @@ impl CommandContext {
             }
         }
 
-        let open_file = |path: String| {
+        let open_file = |path: String, append: bool| {
             fs::OpenOptions::new()
                 .write(true)
                 .create(true)
-                .append(false)
-                .truncate(true)
+                .append(append)
+                .truncate(!append)
                 .open(path)
                 .ok()
         };
 
         Self {
             argv: final_argv,
-            stdout_file: stdout_path.and_then(|p| open_file(p)),
-            stderr_file: stderr_path.and_then(|p| open_file(p)),
+            stdout_file: stdout_path.and_then(|p| open_file(p, append_stdout)),
+            stderr_file: stderr_path.and_then(|p| open_file(p, append_stderr)),
         }
     }
 }
