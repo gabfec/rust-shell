@@ -1,5 +1,6 @@
 use std::env;
 use std::fs;
+use std::fs::File;
 #[allow(unused_imports)]
 use std::io::{self, Write};
 use std::os::unix::fs::PermissionsExt;
@@ -81,6 +82,56 @@ fn tokenize(input: &str) -> Vec<String> {
     tokens
 }
 
+struct CommandContext {
+    argv: Vec<String>,
+    stdout_file: Option<File>,
+    stderr_file: Option<File>,
+}
+
+impl CommandContext {
+    fn parse(tokens: Vec<String>) -> Self {
+        let mut final_argv = Vec::new();
+        let mut stdout_path = None;
+        let mut stderr_path = None;
+
+        let mut i = 0;
+        while i < tokens.len() {
+            match tokens[i].as_str() {
+                ">" | "1>" => {
+                    stdout_path = tokens.get(i + 1).cloned();
+                    i += 2;
+                }
+                "2>" => {
+                    stderr_path = tokens.get(i + 1).cloned();
+                    i += 2;
+                }
+                _ => {
+                    final_argv.push(tokens[i].clone());
+                    i += 1;
+                }
+            }
+        }
+
+        let open_file = |path: String| {
+            fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .append(false)
+                .truncate(true)
+                .open(path)
+                .ok()
+        };
+
+        Self {
+            argv: final_argv,
+            stdout_file: stdout_path.and_then(|p| open_file(p)),
+            stderr_file: stderr_path.and_then(|p| open_file(p)),
+        }
+    }
+}
+
+
+
 fn main() {
     loop {
         print!("$ ");
@@ -94,25 +145,39 @@ fn main() {
             continue;
         }
 
-        // Use the tokenizer instead of split(' ')
         let argv = tokenize(input);
-        let command = &argv[0];
-        let args = &argv[1..];
+        let ctx = CommandContext::parse(argv);
+
+        let command = &ctx.argv[0];
+        let args = &ctx.argv[1..];
 
         match command.as_str() {
             "exit" => break,
-            "echo" => println!("{}", args.join(" ")),
+            "echo" => {
+                let output = args.join(" ");
+                if let Some(mut file) = ctx.stdout_file {
+                    writeln!(file, "{}", output).unwrap();
+                } else {
+                    println!("{}", output);
+                }
+            }
             "type" => {
                 let Some(query) = args.get(0) else {
                     continue;
                 };
 
-                if SHELL_BUILTINS.contains(&query.as_str()) {
-                    println!("{} is a shell builtin", query);
+                let res = if SHELL_BUILTINS.contains(&query.as_str()) {
+                    format!("{} is a shell builtin", query)
                 } else if let Some(full_path) = find_in_path(query) {
-                    println!("{} is {}", query, full_path);
+                    format!("{} is {}", query, full_path)
                 } else {
-                    println!("{}: not found", query);
+                    format!("{}: not found", query)
+                };
+
+                if let Some(mut file) = ctx.stdout_file {
+                    writeln!(file, "{}", res).unwrap();
+                } else {
+                    println!("{}", res);
                 }
             }
             "pwd" => {
@@ -136,12 +201,21 @@ fn main() {
                     println!("cd: {}: No such file or directory", display_path);
                 }
             }
-            _ => match find_in_path(command) {
-                Some(_) => {
-                    Command::new(command).args(args).status().unwrap();
-                }
-                None => {
-                    println!("{}: not found", command)
+            _ => {
+                if let Some(_path) = find_in_path(command) {
+                    let mut cmd = Command::new(command);
+                    cmd.args(args);
+
+                    if let Some(file) = ctx.stdout_file {
+                        cmd.stdout(file);
+                    }
+                    if let Some(file) = ctx.stderr_file {
+                        cmd.stderr(file);
+                    }
+
+                    cmd.status().unwrap();
+                } else {
+                    println!("{}: not found", command);
                 }
             },
         }
