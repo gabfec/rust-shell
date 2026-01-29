@@ -1,6 +1,7 @@
 use std::env;
 use std::fs;
 use std::fs::File;
+use std::io::Read;
 #[allow(unused_imports)]
 use std::io::{self, Write};
 use std::os::unix::fs::PermissionsExt;
@@ -224,21 +225,65 @@ fn execute_command(input: &str) -> bool {
     true
 }
 
+fn set_raw_mode(enable: bool) {
+    let state = if enable { "raw" } else { "-raw" };
+    let echo = if enable { "-echo" } else { "echo" };
+    Command::new("stty").arg(state).arg(echo).status().ok();
+}
+
 fn main() {
+    let mut input_buffer = String::new();
+
     loop {
         print!("$ ");
         io::stdout().flush().unwrap();
+        input_buffer.clear();
 
-        let mut input = String::new();
-        io::stdin().read_line(&mut input).unwrap();
-        let input = input.trim();
+        // Switch to raw mode to intercept Tab
+        set_raw_mode(true);
 
-        if input.is_empty() {
-            continue;
-        }
+        loop {
+            let mut buffer = [0; 1];
+            io::stdin().read_exact(&mut buffer).unwrap();
+            let c = buffer[0] as char;
 
-        if !execute_command(input) {
-            break;
+            match c {
+                '\r' | '\n' => {
+                    // Enter key pressed
+                    set_raw_mode(false); // Back to normal to print output
+                    println!();
+                    if !input_buffer.is_empty() {
+                        let ret = execute_command(input_buffer.trim());
+                        if !ret {
+                            std::process::exit(0);
+                        }
+                    }
+                    break; // Exit inner loop to show new prompt
+                }
+                '\t' => {
+                    // TAB logic
+                    //handle_autocomplete(&mut input_buffer);
+                }
+                '\x7f' => {
+                    // Backspace logic
+                    if !input_buffer.is_empty() {
+                        input_buffer.pop();
+                        print!("\x08 \x08"); // Move back, overwrite with space, move back
+                        io::stdout().flush().unwrap();
+                    }
+                }
+                '\x03' => {
+                    // Ctrl+C
+                    set_raw_mode(false);
+                    std::process::exit(0);
+                }
+                _ => {
+                    // Normal character
+                    input_buffer.push(c);
+                    print!("{}", c);
+                    io::stdout().flush().unwrap();
+                }
+            }
         }
     }
 }
