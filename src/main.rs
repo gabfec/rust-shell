@@ -225,6 +225,49 @@ fn execute_command(input: &str) -> bool {
     true
 }
 
+fn execute_pipeline(input: &str) -> bool {
+    // Check for pipes
+    if !input.contains('|') {
+        return execute_command(input);
+    }
+
+    // Split into segments
+    let segments: Vec<&str> = input.split('|').map(|s| s.trim()).collect();
+
+    // For a dual-pipe: A | B
+    if segments.len() == 2 {
+        let tokens_a = tokenize(segments[0]);
+        let tokens_b = tokenize(segments[1]);
+
+        // Handle redirection for both segments
+        let ctx_a = CommandContext::parse(tokens_a);
+        let ctx_b = CommandContext::parse(tokens_b);
+
+        // We assume piped commands are external for now.
+        // Create the first process
+        let mut child_a = Command::new(&ctx_a.argv[0])
+            .args(&ctx_a.argv[1..])
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .expect("Failed to spawn command A");
+
+        if let Some(stdout_a) = child_a.stdout.take() {
+            // Create the second process, feeding A's output into B's input
+            let mut child_b = Command::new(&ctx_b.argv[0])
+                .args(&ctx_b.argv[1..])
+                .stdin(stdout_a)
+                .spawn()
+                .expect("Failed to spawn command B");
+
+            // Wait for both to finish
+            let _ = child_b.wait();
+        }
+        let _ = child_a.wait();
+    }
+
+    true // Keep the shell running after a pipe finishes
+}
+
 fn set_raw_mode(enable: bool) {
     let state = if enable { "raw" } else { "-raw" };
     let echo = if enable { "-echo" } else { "echo" };
@@ -339,7 +382,7 @@ fn main() {
                     set_raw_mode(false); // Back to normal to print output
                     println!();
                     if !input_buffer.is_empty() {
-                        let ret = execute_command(input_buffer.trim());
+                        let ret = execute_pipeline(input_buffer.trim());
                         if !ret {
                             std::process::exit(0);
                         }
