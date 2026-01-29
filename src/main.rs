@@ -231,6 +231,82 @@ fn set_raw_mode(enable: bool) {
     Command::new("stty").arg(state).arg(echo).status().ok();
 }
 
+fn handle_autocomplete(buffer: &mut String) {
+    let mut matches = Vec::new();
+
+    // Check Builtins
+    for builtin in SHELL_BUILTINS {
+        if builtin.starts_with(buffer.as_str()) {
+            matches.push(builtin.to_string());
+        }
+    }
+
+    // Check PATH
+    if let Some(path_var) = env::var_os("PATH") {
+        for dir in env::split_paths(&path_var) {
+            if let Ok(entries) = fs::read_dir(dir) {
+                for entry in entries.flatten() {
+                    let name = entry.file_name().to_string_lossy().into_owned();
+                    if name.starts_with(buffer.as_str()) && is_executable(&entry.path()) {
+                        if !matches.contains(&name) {
+                            matches.push(name);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    matches.sort();
+
+    match matches.len() {
+        0 => {
+            // No match: ring the bell
+            print!("\x07");
+            io::stdout().flush().unwrap();
+        }
+        1 => {
+            // Single match: complete it
+            let completion = &matches[0][buffer.len()..];
+            print!("{} ", completion);
+            buffer.push_str(completion);
+            buffer.push(' ');
+            io::stdout().flush().unwrap();
+        }
+        _ => {
+            // Multiple matches logic
+            handle_multiple_matches(buffer, matches);
+        }
+    }
+}
+
+fn handle_multiple_matches(buffer: &mut String, matches: Vec<String>) {
+    // Find Longest Common Prefix (LCP)
+    let first = &matches[0];
+    let mut lcp_len = buffer.len();
+
+    'outer: for i in buffer.len()..first.len() {
+        let char_at_i = first.chars().nth(i).unwrap();
+        for m in &matches {
+            if m.chars().nth(i) != Some(char_at_i) {
+                break 'outer;
+            }
+        }
+        lcp_len += 1;
+    }
+
+    if lcp_len > buffer.len() {
+        // We found a bit more to complete
+        let extra = &first[buffer.len()..lcp_len];
+        print!("{}", extra);
+        buffer.push_str(extra);
+    } else {
+        // No common prefix beyond what we have, just beep
+        print!("\x07");
+    }
+    io::stdout().flush().unwrap();
+}
+
 fn main() {
     let mut input_buffer = String::new();
 
@@ -262,7 +338,7 @@ fn main() {
                 }
                 '\t' => {
                     // TAB logic
-                    //handle_autocomplete(&mut input_buffer);
+                    handle_autocomplete(&mut input_buffer);
                 }
                 '\x7f' => {
                     // Backspace logic
