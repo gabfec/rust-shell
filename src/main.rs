@@ -144,7 +144,85 @@ impl CommandContext {
     }
 }
 
+fn execute_command(input: &str) -> bool {
+    let argv = tokenize(input);
+    let ctx = CommandContext::parse(argv);
 
+    let command = &ctx.argv[0];
+    let args = &ctx.argv[1..];
+
+    match command.as_str() {
+        "exit" => {
+            return false;
+        }
+        "echo" => {
+            let output = args.join(" ");
+            if let Some(mut file) = ctx.stdout_file {
+                writeln!(file, "{}", output).unwrap();
+            } else {
+                println!("{}", output);
+            }
+        }
+        "type" => {
+            let Some(query) = args.get(0) else {
+                return true;
+            };
+
+            let res = if SHELL_BUILTINS.contains(&query.as_str()) {
+                format!("{} is a shell builtin", query)
+            } else if let Some(full_path) = find_in_path(query) {
+                format!("{} is {}", query, full_path)
+            } else {
+                format!("{}: not found", query)
+            };
+
+            if let Some(mut file) = ctx.stdout_file {
+                writeln!(file, "{}", res).unwrap();
+            } else {
+                println!("{}", res);
+            }
+        }
+        "pwd" => {
+            println!("{}", env::current_dir().unwrap().display())
+        }
+        "cd" => {
+            let home_dir = env::var("HOME").unwrap();
+            let path = match args.get(0) {
+                None => PathBuf::from(&home_dir),
+                Some(raw_arg) => {
+                    if let Some(rest) = raw_arg.strip_prefix('~') {
+                        Path::new(&home_dir).join(rest)
+                    } else {
+                        PathBuf::from(raw_arg)
+                    }
+                }
+            };
+
+            if let Err(_) = env::set_current_dir(&path) {
+                let display_path = args.get(0).map(|s| s.as_str()).unwrap_or("~");
+                println!("cd: {}: No such file or directory", display_path);
+            }
+        }
+        _ => {
+            if let Some(_path) = find_in_path(command) {
+                let mut cmd = Command::new(command);
+                cmd.args(args);
+
+                if let Some(file) = ctx.stdout_file {
+                    cmd.stdout(file);
+                }
+                if let Some(file) = ctx.stderr_file {
+                    cmd.stderr(file);
+                }
+
+                cmd.status().unwrap();
+            } else {
+                println!("{}: not found", command);
+            }
+        }
+    }
+    true
+}
 
 fn main() {
     loop {
@@ -159,79 +237,8 @@ fn main() {
             continue;
         }
 
-        let argv = tokenize(input);
-        let ctx = CommandContext::parse(argv);
-
-        let command = &ctx.argv[0];
-        let args = &ctx.argv[1..];
-
-        match command.as_str() {
-            "exit" => break,
-            "echo" => {
-                let output = args.join(" ");
-                if let Some(mut file) = ctx.stdout_file {
-                    writeln!(file, "{}", output).unwrap();
-                } else {
-                    println!("{}", output);
-                }
-            }
-            "type" => {
-                let Some(query) = args.get(0) else {
-                    continue;
-                };
-
-                let res = if SHELL_BUILTINS.contains(&query.as_str()) {
-                    format!("{} is a shell builtin", query)
-                } else if let Some(full_path) = find_in_path(query) {
-                    format!("{} is {}", query, full_path)
-                } else {
-                    format!("{}: not found", query)
-                };
-
-                if let Some(mut file) = ctx.stdout_file {
-                    writeln!(file, "{}", res).unwrap();
-                } else {
-                    println!("{}", res);
-                }
-            }
-            "pwd" => {
-                println!("{}", env::current_dir().unwrap().display())
-            }
-            "cd" => {
-                let home_dir = env::var("HOME").unwrap();
-                let path = match args.get(0) {
-                    None => PathBuf::from(&home_dir),
-                    Some(raw_arg) => {
-                        if let Some(rest) = raw_arg.strip_prefix('~') {
-                            Path::new(&home_dir).join(rest)
-                        } else {
-                            PathBuf::from(raw_arg)
-                        }
-                    }
-                };
-
-                if let Err(_) = env::set_current_dir(&path) {
-                    let display_path = args.get(0).map(|s| s.as_str()).unwrap_or("~");
-                    println!("cd: {}: No such file or directory", display_path);
-                }
-            }
-            _ => {
-                if let Some(_path) = find_in_path(command) {
-                    let mut cmd = Command::new(command);
-                    cmd.args(args);
-
-                    if let Some(file) = ctx.stdout_file {
-                        cmd.stdout(file);
-                    }
-                    if let Some(file) = ctx.stderr_file {
-                        cmd.stderr(file);
-                    }
-
-                    cmd.status().unwrap();
-                } else {
-                    println!("{}: not found", command);
-                }
-            },
+        if !execute_command(input) {
+            break;
         }
     }
 }
