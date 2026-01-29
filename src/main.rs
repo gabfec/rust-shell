@@ -231,7 +231,7 @@ fn set_raw_mode(enable: bool) {
     Command::new("stty").arg(state).arg(echo).status().ok();
 }
 
-fn handle_autocomplete(buffer: &mut String) {
+fn handle_autocomplete(buffer: &mut String, tab_count: u32) {
     let mut matches = Vec::new();
 
     // Check Builtins
@@ -275,40 +275,46 @@ fn handle_autocomplete(buffer: &mut String) {
         }
         _ => {
             // Multiple matches logic
-            handle_multiple_matches(buffer, matches);
+            handle_multiple_matches(buffer, matches, tab_count);
         }
     }
 }
 
-fn handle_multiple_matches(buffer: &mut String, matches: Vec<String>) {
-    // Find Longest Common Prefix (LCP)
-    let first = &matches[0];
-    let mut lcp_len = buffer.len();
+fn handle_multiple_matches(buffer: &mut String, matches: Vec<String>, tab_count: u32) {
+    if tab_count == 1 {
+        // Longest Common Prefix (LCP) Logic
+        let first = &matches[0];
+        let mut lcp_len = buffer.len();
 
-    'outer: for i in buffer.len()..first.len() {
-        let char_at_i = first.chars().nth(i).unwrap();
-        for m in &matches {
-            if m.chars().nth(i) != Some(char_at_i) {
-                break 'outer;
+        'outer: for i in buffer.len()..first.len() {
+            let char_at_i = first.chars().nth(i).unwrap();
+            for m in &matches {
+                if m.chars().nth(i) != Some(char_at_i) {
+                    break 'outer;
+                }
             }
+            lcp_len += 1;
         }
-        lcp_len += 1;
-    }
 
-    if lcp_len > buffer.len() {
-        // We found a bit more to complete
-        let extra = &first[buffer.len()..lcp_len];
-        print!("{}", extra);
-        buffer.push_str(extra);
-    } else {
-        // No common prefix beyond what we have, just beep
-        print!("\x07");
+        if lcp_len > buffer.len() {
+            let extra = &first[buffer.len()..lcp_len];
+            print!("{}", extra);
+            buffer.push_str(extra);
+        } else {
+            print!("\x07"); // Bell if no more common chars
+        }
+    } else if tab_count >= 2 {
+        // Double Tab Listing Logic
+        println!(); // New line for the list
+        println!("\r{}\r", matches.join("  "));
+        print!("$ {}", buffer); // Restore the prompt line
     }
-    io::stdout().flush().unwrap();
+    let _ = io::stdout().flush();
 }
 
 fn main() {
     let mut input_buffer = String::new();
+    let mut tab_count = 0;
 
     loop {
         print!("$ ");
@@ -322,6 +328,10 @@ fn main() {
             let mut buffer = [0; 1];
             io::stdin().read_exact(&mut buffer).unwrap();
             let c = buffer[0] as char;
+
+            if c != '\t' {
+                tab_count = 0;
+            }
 
             match c {
                 '\r' | '\n' => {
@@ -338,7 +348,8 @@ fn main() {
                 }
                 '\t' => {
                     // TAB logic
-                    handle_autocomplete(&mut input_buffer);
+                    tab_count += 1;
+                    handle_autocomplete(&mut input_buffer, tab_count);
                 }
                 '\x7f' => {
                     // Backspace logic
