@@ -8,7 +8,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-const SHELL_BUILTINS: &[&str] = &["exit", "echo", "type", "pwd", "cd"];
+const SHELL_BUILTINS: &[&str] = &["exit", "echo", "type", "pwd", "cd", "history"];
 
 fn is_executable(path: &std::path::Path) -> bool {
     if let Ok(metadata) = fs::metadata(path) {
@@ -145,7 +145,7 @@ impl CommandContext {
     }
 }
 
-fn execute_command(input: &str) -> bool {
+fn execute_command(input: &str, history: &[String]) -> bool {
     let argv = tokenize(input);
     let ctx = CommandContext::parse(argv);
 
@@ -205,6 +205,12 @@ fn execute_command(input: &str) -> bool {
                 println!("cd: {}: No such file or directory", display_path);
             }
         }
+        "history" => {
+            for (i, cmd) in history.iter().enumerate() {
+                // Formatting: index starts at 1
+                println!("{:>5}  {}", i + 1, cmd);
+            }
+        }
         _ => {
             if let Some(_path) = find_in_path(command) {
                 let mut cmd = Command::new(command);
@@ -226,10 +232,10 @@ fn execute_command(input: &str) -> bool {
     true
 }
 
-fn execute_pipeline(input: &str) -> bool {
+fn execute_pipeline(input: &str, history: &[String]) -> bool {
     // Check for pipes
     if !input.contains('|') {
-        return execute_command(input);
+        return execute_command(input, history);
     }
 
     // Split into segments
@@ -395,6 +401,7 @@ fn handle_multiple_matches(buffer: &mut String, matches: Vec<String>, tab_count:
 
 fn main() {
     let mut input_buffer = String::new();
+    let mut history: Vec<String> = Vec::new();
     let mut tab_count = 0;
 
     loop {
@@ -420,7 +427,10 @@ fn main() {
                     set_raw_mode(false); // Back to normal to print output
                     println!();
                     if !input_buffer.is_empty() {
-                        if !execute_pipeline(input_buffer.trim()) {
+                        let command = input_buffer.trim().to_string();
+                        history.push(command.clone()); // Record the command
+
+                        if !execute_pipeline(input_buffer.trim(), &history) {
                             std::process::exit(0);
                         }
                     }
