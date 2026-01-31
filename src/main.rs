@@ -206,9 +206,17 @@ fn execute_command(input: &str, history: &[String]) -> bool {
             }
         }
         "history" => {
-            for (i, cmd) in history.iter().enumerate() {
+            let count = args.get(0).and_then(|s| s.parse::<usize>().ok());
+
+            // Determine where to start printing
+            let start_index = match count {
+                Some(n) if n < history.len() => history.len() - n,
+                _ => 0,
+            };
+
+            for i in start_index..history.len() {
                 // Formatting: index starts at 1
-                println!("{:>5}  {}", i + 1, cmd);
+                println!("{:>5}  {}", i + 1, history[i]);
             }
         }
         _ => {
