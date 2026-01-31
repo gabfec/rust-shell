@@ -6,7 +6,7 @@ use std::io::Read;
 use std::io::{self, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 const SHELL_BUILTINS: &[&str] = &["exit", "echo", "type", "pwd", "cd"];
 
@@ -154,6 +154,7 @@ fn execute_command(input: &str) -> bool {
 
     match command.as_str() {
         "exit" => {
+            set_raw_mode(false);
             return false;
         }
         "echo" => {
@@ -233,39 +234,76 @@ fn execute_pipeline(input: &str) -> bool {
 
     // Split into segments
     let segments: Vec<&str> = input.split('|').map(|s| s.trim()).collect();
+    let mut prev_stdout: Option<Stdio> = None;
+    let mut children = Vec::new();
 
-    // For a dual-pipe: A | B
-    if segments.len() == 2 {
-        let tokens_a = tokenize(segments[0]);
-        let tokens_b = tokenize(segments[1]);
+    // For a multiple-pipe: A | B | ... | N
+    for (i, segment) in segments.iter().enumerate() {
+        let is_last = i == segments.len() - 1;
+        let ctx = CommandContext::parse(tokenize(segment));
 
-        // Handle redirection for both segments
-        let ctx_a = CommandContext::parse(tokens_a);
-        let ctx_b = CommandContext::parse(tokens_b);
+        if SHELL_BUILTINS.contains(&ctx.argv[0].as_str()) {
+            let output = run_builtin_capture(&ctx);
+            if is_last {
+                print!("{}", output);
+            } else {
+                // Bridge builtin output to next command via a small helper
+                prev_stdout = Some(string_to_stdio(output));
+            }
+        } else {
+            let mut cmd = Command::new(&ctx.argv[0]);
+            cmd.args(&ctx.argv[1..]);
 
-        // We assume piped commands are external for now.
-        // Create the first process
-        let mut child_a = Command::new(&ctx_a.argv[0])
-            .args(&ctx_a.argv[1..])
-            .stdout(std::process::Stdio::piped())
-            .spawn()
-            .expect("Failed to spawn command A");
+            // Connect plumbing
+            if let Some(prev) = prev_stdout.take() {
+                cmd.stdin(prev);
+            }
+            if !is_last {
+                cmd.stdout(Stdio::piped());
+            }
 
-        if let Some(stdout_a) = child_a.stdout.take() {
-            // Create the second process, feeding A's output into B's input
-            let mut child_b = Command::new(&ctx_b.argv[0])
-                .args(&ctx_b.argv[1..])
-                .stdin(stdout_a)
-                .spawn()
-                .expect("Failed to spawn command B");
+            let mut child = cmd.spawn().expect("Failed to spawn");
 
-            // Wait for both to finish
-            let _ = child_b.wait();
+            if !is_last {
+                prev_stdout = child.stdout.take().map(Stdio::from);
+            }
+            children.push(child);
         }
-        let _ = child_a.wait();
     }
 
-    true // Keep the shell running after a pipe finishes
+    // Wait for all external processes to finish
+    for mut child in children {
+        let _ = child.wait();
+    }
+    true
+}
+
+// Helper to turn a String into a Stdio source (for builtins in the middle of pipes)
+fn string_to_stdio(input: String) -> Stdio {
+    let mut child = Command::new("printf")
+        .arg(input)
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    Stdio::from(child.stdout.take().unwrap())
+}
+
+fn run_builtin_capture(ctx: &CommandContext) -> String {
+    match ctx.argv[0].as_str() {
+        "echo" => ctx.argv[1..].join(" ") + "\n",
+        "pwd" => env::current_dir().unwrap().display().to_string() + "\n",
+        "type" => {
+            let query = &ctx.argv[1];
+            if SHELL_BUILTINS.contains(&query.as_str()) {
+                format!("{} is a shell builtin\n", query)
+            } else if let Some(path) = find_in_path(query) {
+                format!("{} is {}\n", query, path)
+            } else {
+                format!("{}: not found\n", query)
+            }
+        }
+        _ => String::new(),
+    }
 }
 
 fn set_raw_mode(enable: bool) {
@@ -382,8 +420,7 @@ fn main() {
                     set_raw_mode(false); // Back to normal to print output
                     println!();
                     if !input_buffer.is_empty() {
-                        let ret = execute_pipeline(input_buffer.trim());
-                        if !ret {
+                        if !execute_pipeline(input_buffer.trim()) {
                             std::process::exit(0);
                         }
                     }
