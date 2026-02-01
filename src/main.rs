@@ -1,7 +1,12 @@
+use rustyline::Helper;
+use rustyline::completion::Completer;
+use rustyline::config::Configurer;
+use rustyline::error::ReadlineError;
+use rustyline::history::DefaultHistory;
+use rustyline::{Context, Editor, Highlighter, Hinter, Validator};
 use std::env;
 use std::fs;
 use std::fs::File;
-use std::io::Read;
 #[allow(unused_imports)]
 use std::io::{self, Write};
 use std::os::unix::fs::PermissionsExt;
@@ -154,7 +159,6 @@ fn execute_command(input: &str, history: &[String]) -> bool {
 
     match command.as_str() {
         "exit" => {
-            set_raw_mode(false);
             return false;
         }
         "echo" => {
@@ -320,155 +324,132 @@ fn run_builtin_capture(ctx: &CommandContext) -> String {
     }
 }
 
-fn set_raw_mode(enable: bool) {
-    let state = if enable { "raw" } else { "-raw" };
-    let echo = if enable { "-echo" } else { "echo" };
-    Command::new("stty").arg(state).arg(echo).status().ok();
-}
+#[derive(Helper, Hinter, Highlighter, Validator)]
+struct ShellHelper;
 
-fn handle_autocomplete(buffer: &mut String, tab_count: u32) {
-    let mut matches = Vec::new();
+impl Completer for ShellHelper {
+    type Candidate = String;
 
-    // Check Builtins
-    for builtin in SHELL_BUILTINS {
-        if builtin.starts_with(buffer.as_str()) {
-            matches.push(builtin.to_string());
+    fn complete(
+        &self,
+        line: &str,
+        pos: usize,
+        _ctx: &Context<'_>,
+    ) -> rustyline::Result<(usize, Vec<String>)> {
+        let mut matches = Vec::new();
+        let buffer = &line[..pos];
+
+        // Check Builtins
+        for builtin in SHELL_BUILTINS {
+            if builtin.starts_with(buffer) {
+                matches.push(builtin.to_string());
+            }
         }
-    }
 
-    // Check PATH
-    if let Some(path_var) = env::var_os("PATH") {
-        for dir in env::split_paths(&path_var) {
-            if let Ok(entries) = fs::read_dir(dir) {
-                for entry in entries.flatten() {
-                    let name = entry.file_name().to_string_lossy().into_owned();
-                    if name.starts_with(buffer.as_str()) && is_executable(&entry.path()) {
-                        if !matches.contains(&name) {
-                            matches.push(name);
+        // Check PATH
+        if let Some(path_var) = env::var_os("PATH") {
+            for dir in env::split_paths(&path_var) {
+                if let Ok(entries) = fs::read_dir(dir) {
+                    for entry in entries.flatten() {
+                        let name = entry.file_name().to_string_lossy().into_owned();
+                        if name.starts_with(buffer) && is_executable(&entry.path()) {
+                            if !matches.contains(&name) {
+                                matches.push(name);
+                            }
                         }
                     }
                 }
             }
         }
-    }
 
-    matches.sort();
+        if matches.is_empty() {
+            return Ok((0, Vec::new()));
+        }
 
-    match matches.len() {
-        0 => {
-            // No match: ring the bell
-            print!("\x07");
-            io::stdout().flush().unwrap();
-        }
-        1 => {
-            // Single match: complete it
-            let completion = &matches[0][buffer.len()..];
-            print!("{} ", completion);
-            buffer.push_str(completion);
-            buffer.push(' ');
-            io::stdout().flush().unwrap();
-        }
-        _ => {
-            // Multiple matches logic
-            handle_multiple_matches(buffer, matches, tab_count);
-        }
-    }
-}
+        matches.sort();
+        matches.dedup();
 
-fn handle_multiple_matches(buffer: &mut String, matches: Vec<String>, tab_count: u32) {
-    if tab_count == 1 {
-        // Longest Common Prefix (LCP) Logic
+        // Case: Single unique match -> Append space
+        if matches.len() == 1 {
+            let mut completion = matches[0].clone();
+            completion.push(' ');
+            return Ok((0, vec![completion]));
+        }
+
+        // Multiple matches -> Find Longest Common Prefix (LCP)
         let first = &matches[0];
         let mut lcp_len = buffer.len();
 
-        'outer: for i in buffer.len()..first.len() {
-            let char_at_i = first.chars().nth(i).unwrap();
-            for m in &matches {
-                if m.chars().nth(i) != Some(char_at_i) {
-                    break 'outer;
-                }
+        for i in buffer.len()..first.len() {
+            let current_char = first.chars().nth(i).unwrap();
+            if matches
+                .iter()
+                .all(|m| m.chars().nth(i) == Some(current_char))
+            {
+                lcp_len += 1;
+            } else {
+                break;
             }
-            lcp_len += 1;
         }
 
         if lcp_len > buffer.len() {
-            let extra = &first[buffer.len()..lcp_len];
-            print!("{}", extra);
-            buffer.push_str(extra);
+            // We found more common characters to add (e.g., "xyz_pig" and "xyz_piglet")
+            let lcp = first[..lcp_len].to_string();
+            Ok((0, vec![lcp]))
         } else {
-            print!("\x07"); // Bell if no more common chars
+            // No common chars can be added (the fox/dog/rat case).
+            // We return the CURRENT BUFFER as the candidate.
+            // This prevents Rustyline from auto-filling "xyz_dog" and
+            // triggers the bell because the line didn't change.
+
+            Ok((0, matches))
         }
-    } else if tab_count >= 2 {
-        // Double Tab Listing Logic
-        println!(); // New line for the list
-        println!("\r{}\r", matches.join("  "));
-        print!("$ {}", buffer); // Restore the prompt line
     }
-    let _ = io::stdout().flush();
 }
 
-fn main() {
-    let mut input_buffer = String::new();
+fn main() -> rustyline::Result<()> {
+    // Specify types explicitly to help the compiler infer 'line' type
+    let mut rl: Editor<ShellHelper, DefaultHistory> = Editor::new()?;
+    rl.set_helper(Some(ShellHelper));
+
+    // It tells rustyline to only complete up to the common part.
+    rl.set_completion_type(rustyline::CompletionType::List);
+
     let mut history: Vec<String> = Vec::new();
-    let mut tab_count = 0;
 
     loop {
-        print!("$ ");
-        io::stdout().flush().unwrap();
-        input_buffer.clear();
+        let readline = rl.readline("$ ");
 
-        // Switch to raw mode to intercept Tab
-        set_raw_mode(true);
+        match readline {
+            Ok(line) => {
+                let trimmed = line.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
 
-        loop {
-            let mut buffer = [0; 1];
-            io::stdin().read_exact(&mut buffer).unwrap();
-            let c = buffer[0] as char;
+                // Internal rustyline history (for UP arrow)
+                let _ = rl.add_history_entry(trimmed);
 
-            if c != '\t' {
-                tab_count = 0;
+                let command = trimmed.to_string();
+                history.push(command); // Record the command
+
+                if !execute_pipeline(trimmed, &history) {
+                    break;
+                }
             }
-
-            match c {
-                '\r' | '\n' => {
-                    // Enter key pressed
-                    set_raw_mode(false); // Back to normal to print output
-                    println!();
-                    if !input_buffer.is_empty() {
-                        let command = input_buffer.trim().to_string();
-                        history.push(command.clone()); // Record the command
-
-                        if !execute_pipeline(input_buffer.trim(), &history) {
-                            std::process::exit(0);
-                        }
-                    }
-                    break; // Exit inner loop to show new prompt
-                }
-                '\t' => {
-                    // TAB logic
-                    tab_count += 1;
-                    handle_autocomplete(&mut input_buffer, tab_count);
-                }
-                '\x7f' => {
-                    // Backspace logic
-                    if !input_buffer.is_empty() {
-                        input_buffer.pop();
-                        print!("\x08 \x08"); // Move back, overwrite with space, move back
-                        io::stdout().flush().unwrap();
-                    }
-                }
-                '\x03' => {
-                    // Ctrl+C
-                    set_raw_mode(false);
-                    std::process::exit(0);
-                }
-                _ => {
-                    // Normal character
-                    input_buffer.push(c);
-                    print!("{}", c);
-                    io::stdout().flush().unwrap();
-                }
+            Err(ReadlineError::Interrupted) => {
+                // Ctrl-C
+                break;
+            }
+            Err(ReadlineError::Eof) => {
+                // Ctrl-D
+                break;
+            }
+            Err(err) => {
+                println!("Error: {:?}", err);
+                break;
             }
         }
     }
+    Ok(())
 }
