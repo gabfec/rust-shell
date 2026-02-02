@@ -150,7 +150,7 @@ impl CommandContext {
     }
 }
 
-fn execute_command(input: &str, history: &mut Vec<String>) -> bool {
+fn execute_command(input: &str, history: &mut Vec<String>, last_sync_index: &mut usize) -> bool {
     let argv = tokenize(input);
     let ctx = CommandContext::parse(argv);
 
@@ -234,6 +234,22 @@ fn execute_command(input: &str, history: &mut Vec<String>) -> bool {
                         }
                     }
                 }
+                Some("-a") => {
+                    if let Some(path) = args_iter.next() {
+                        // Open file in Append mode
+                        let file_result =
+                            fs::OpenOptions::new().create(true).append(true).open(path);
+
+                        if let Ok(mut file) = file_result {
+                            // Only write the "new" commands
+                            for i in *last_sync_index..history.len() {
+                                let _ = writeln!(file, "{}", history[i]);
+                            }
+                            // Update the offset so the next -a starts from here
+                            *last_sync_index = history.len();
+                        }
+                    }
+                }
                 _ => {
                     // Standard history <n> logic
                     let count = args.get(0).and_then(|s| s.parse::<usize>().ok());
@@ -272,10 +288,10 @@ fn execute_command(input: &str, history: &mut Vec<String>) -> bool {
     true
 }
 
-fn execute_pipeline(input: &str, history: &mut Vec<String>) -> bool {
+fn execute_pipeline(input: &str, history: &mut Vec<String>, last_sync_index: &mut usize) -> bool {
     // Check for pipes
     if !input.contains('|') {
-        return execute_command(input, history);
+        return execute_command(input, history, last_sync_index);
     }
 
     // Split into segments
@@ -419,6 +435,7 @@ fn main() -> rustyline::Result<()> {
     rl.set_completion_type(rustyline::CompletionType::List);
 
     let mut history: Vec<String> = Vec::new();
+    let mut last_sync_index = 0; // Tracks what has been written to disk
 
     loop {
         let readline = rl.readline("$ ");
@@ -436,7 +453,7 @@ fn main() -> rustyline::Result<()> {
                 let command = trimmed.to_string();
                 history.push(command); // Record the command
 
-                if !execute_pipeline(trimmed, &mut history) {
+                if !execute_pipeline(trimmed, &mut history, &mut last_sync_index) {
                     break;
                 }
             }
