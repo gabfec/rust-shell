@@ -223,6 +223,17 @@ fn execute_command(input: &str, history: &mut Vec<String>) -> bool {
                         }
                     }
                 }
+                Some("-w") => {
+                    if let Some(path) = args_iter.next() {
+                        // Open file: Create if not exists, truncate if it does
+                        if let Ok(mut file) = fs::File::create(path) {
+                            for entry in history {
+                                // Write each command followed by a newline
+                                let _ = writeln!(file, "{}", entry);
+                            }
+                        }
+                    }
+                }
                 _ => {
                     // Standard history <n> logic
                     let count = args.get(0).and_then(|s| s.parse::<usize>().ok());
