@@ -466,6 +466,15 @@ fn main() -> rustyline::Result<()> {
                 history.push(command); // Record the command
 
                 if !execute_pipeline(trimmed, &mut history, &mut last_sync_index) {
+                    // Write history on exit
+                    if let Ok(hist_path) = std::env::var("HISTFILE") {
+                        if let Ok(mut f) = std::fs::File::create(hist_path) {
+                            for entry in &history {
+                                let _ = writeln!(f, "{}", entry);
+                            }
+                        }
+                    }
+
                     break;
                 }
             }
