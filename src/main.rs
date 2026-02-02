@@ -150,7 +150,7 @@ impl CommandContext {
     }
 }
 
-fn execute_command(input: &str, history: &[String]) -> bool {
+fn execute_command(input: &str, history: &mut Vec<String>) -> bool {
     let argv = tokenize(input);
     let ctx = CommandContext::parse(argv);
 
@@ -210,17 +210,34 @@ fn execute_command(input: &str, history: &[String]) -> bool {
             }
         }
         "history" => {
-            let count = args.get(0).and_then(|s| s.parse::<usize>().ok());
+            let mut args_iter = args.iter();
+            match args_iter.next().map(|s| s.as_str()) {
+                Some("-r") => {
+                    if let Some(path) = args_iter.next() {
+                        if let Ok(file_content) = fs::read_to_string(path) {
+                            for line in file_content.lines() {
+                                if !line.trim().is_empty() {
+                                    history.push(line.to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => {
+                    // Standard history <n> logic
+                    let count = args.get(0).and_then(|s| s.parse::<usize>().ok());
 
-            // Determine where to start printing
-            let start_index = match count {
-                Some(n) if n < history.len() => history.len() - n,
-                _ => 0,
-            };
+                    // Determine where to start printing
+                    let start_index = match count {
+                        Some(n) if n < history.len() => history.len() - n,
+                        _ => 0,
+                    };
 
-            for i in start_index..history.len() {
-                // Formatting: index starts at 1
-                println!("{:>5}  {}", i + 1, history[i]);
+                    for i in start_index..history.len() {
+                        // Formatting: index starts at 1
+                        println!("{:>5}  {}", i + 1, history[i]);
+                    }
+                }
             }
         }
         _ => {
@@ -244,7 +261,7 @@ fn execute_command(input: &str, history: &[String]) -> bool {
     true
 }
 
-fn execute_pipeline(input: &str, history: &[String]) -> bool {
+fn execute_pipeline(input: &str, history: &mut Vec<String>) -> bool {
     // Check for pipes
     if !input.contains('|') {
         return execute_command(input, history);
@@ -408,7 +425,7 @@ fn main() -> rustyline::Result<()> {
                 let command = trimmed.to_string();
                 history.push(command); // Record the command
 
-                if !execute_pipeline(trimmed, &history) {
+                if !execute_pipeline(trimmed, &mut history) {
                     break;
                 }
             }
