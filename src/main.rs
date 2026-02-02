@@ -369,39 +369,14 @@ impl Completer for ShellHelper {
         matches.sort();
         matches.dedup();
 
-        // Case: Single unique match -> Append space
         if matches.len() == 1 {
+            // Single unique match -> Append space
             let mut completion = matches[0].clone();
             completion.push(' ');
-            return Ok((0, vec![completion]));
-        }
-
-        // Multiple matches -> Find Longest Common Prefix (LCP)
-        let first = &matches[0];
-        let mut lcp_len = buffer.len();
-
-        for i in buffer.len()..first.len() {
-            let current_char = first.chars().nth(i).unwrap();
-            if matches
-                .iter()
-                .all(|m| m.chars().nth(i) == Some(current_char))
-            {
-                lcp_len += 1;
-            } else {
-                break;
-            }
-        }
-
-        if lcp_len > buffer.len() {
-            // We found more common characters to add (e.g., "xyz_pig" and "xyz_piglet")
-            let lcp = first[..lcp_len].to_string();
-            Ok((0, vec![lcp]))
+            Ok((0, vec![completion]))
         } else {
-            // No common chars can be added (the fox/dog/rat case).
-            // We return the CURRENT BUFFER as the candidate.
-            // This prevents Rustyline from auto-filling "xyz_dog" and
-            // triggers the bell because the line didn't change.
-
+            // Multiple matches -> Find Longest Common Prefix (LCP)
+            // Let Rustyline handle the LCP and the Bell
             Ok((0, matches))
         }
     }
