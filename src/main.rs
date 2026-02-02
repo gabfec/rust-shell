@@ -437,6 +437,18 @@ fn main() -> rustyline::Result<()> {
     let mut history: Vec<String> = Vec::new();
     let mut last_sync_index = 0; // Tracks what has been written to disk
 
+    // Startup load
+    if let Ok(hist_path) = std::env::var("HISTFILE") {
+        if let Ok(content) = std::fs::read_to_string(&hist_path) {
+            for line in content.lines() {
+                let trimmed = line.trim();
+                if !trimmed.is_empty() {
+                    history.push(trimmed.to_string());
+                }
+            }
+        }
+    }
+
     loop {
         let readline = rl.readline("$ ");
 
