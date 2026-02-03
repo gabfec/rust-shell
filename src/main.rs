@@ -426,6 +426,30 @@ impl Completer for ShellHelper {
     }
 }
 
+fn load_startup_history(history: &mut Vec<String>, rl: &mut Editor<ShellHelper, DefaultHistory>) {
+    if let Ok(hist_path) = std::env::var("HISTFILE") {
+        if let Ok(content) = std::fs::read_to_string(&hist_path) {
+            for line in content.lines() {
+                let trimmed = line.trim();
+                if !trimmed.is_empty() {
+                    history.push(trimmed.to_string());
+                    let _ = rl.add_history_entry(trimmed);
+                }
+            }
+        }
+    }
+}
+
+fn save_shutdown_history(history_vec: &[String]) {
+    if let Ok(hist_path) = std::env::var("HISTFILE") {
+        if let Ok(mut f) = std::fs::File::create(hist_path) {
+            for entry in history_vec {
+                let _ = writeln!(f, "{}", entry);
+            }
+        }
+    }
+}
+
 fn main() -> rustyline::Result<()> {
     // Specify types explicitly to help the compiler infer 'line' type
     let mut rl: Editor<ShellHelper, DefaultHistory> = Editor::new()?;
@@ -435,19 +459,10 @@ fn main() -> rustyline::Result<()> {
     rl.set_completion_type(rustyline::CompletionType::List);
 
     let mut history: Vec<String> = Vec::new();
-    let mut last_sync_index = 0; // Tracks what has been written to disk
 
     // Startup load
-    if let Ok(hist_path) = std::env::var("HISTFILE") {
-        if let Ok(content) = std::fs::read_to_string(&hist_path) {
-            for line in content.lines() {
-                let trimmed = line.trim();
-                if !trimmed.is_empty() {
-                    history.push(trimmed.to_string());
-                }
-            }
-        }
-    }
+    load_startup_history(&mut history, &mut rl);
+    let mut last_sync_index = history.len(); // Tracks what has been written to disk
 
     loop {
         let readline = rl.readline("$ ");
@@ -466,15 +481,6 @@ fn main() -> rustyline::Result<()> {
                 history.push(command); // Record the command
 
                 if !execute_pipeline(trimmed, &mut history, &mut last_sync_index) {
-                    // Write history on exit
-                    if let Ok(hist_path) = std::env::var("HISTFILE") {
-                        if let Ok(mut f) = std::fs::File::create(hist_path) {
-                            for entry in &history {
-                                let _ = writeln!(f, "{}", entry);
-                            }
-                        }
-                    }
-
                     break;
                 }
             }
@@ -492,5 +498,7 @@ fn main() -> rustyline::Result<()> {
             }
         }
     }
+
+    save_shutdown_history(&history);
     Ok(())
 }
