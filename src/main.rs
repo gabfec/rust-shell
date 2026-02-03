@@ -486,7 +486,8 @@ fn main() -> rustyline::Result<()> {
             }
             Err(ReadlineError::Interrupted) => {
                 // Ctrl-C
-                break;
+                println!();  // Simply print a newline and continue the loop for a new prompt
+                continue;
             }
             Err(ReadlineError::Eof) => {
                 // Ctrl-D
