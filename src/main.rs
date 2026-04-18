@@ -28,8 +28,36 @@ impl Completer for ShellHelper {
         pos: usize,
         _ctx: &Context<'_>,
     ) -> rustyline::Result<(usize, Vec<String>)> {
-        let mut matches = Vec::new();
         let buffer = &line[..pos];
+
+        // If there's a space, we're completing a filename argument
+        if let Some(last_space) = buffer.rfind(' ') {
+            let prefix = &buffer[last_space + 1..];
+            let start = last_space + 1;
+
+            let mut matches = Vec::new();
+            if let Ok(entries) = fs::read_dir(".") {
+                for entry in entries.flatten() {
+                    let name = entry.file_name().to_string_lossy().into_owned();
+                    if name.starts_with(prefix) {
+                        matches.push(name);
+                    }
+                }
+            }
+
+            matches.sort();
+
+            if matches.len() == 1 {
+                let mut completion = matches[0].clone();
+                completion.push(' ');
+                return Ok((start, vec![completion]));
+            } else {
+                return Ok((start, matches));
+            }
+        }
+
+        // No space: complete command (builtins + PATH)
+        let mut matches = Vec::new();
 
         // Check Builtins
         for builtin in SHELL_BUILTINS {
