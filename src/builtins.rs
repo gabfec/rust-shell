@@ -89,8 +89,16 @@ pub fn handle_builtin(
         }
 
         "jobs" => {
-            for job in jobs.iter() {
-                println!("[{}]+  {:<24}{} &", job.id, "Running", job.command);
+            let n = jobs.len();
+            for (i, job) in jobs.iter().enumerate() {
+                let marker = if i == n - 1 {
+                    '+'
+                } else if i == n - 2 {
+                    '-'
+                } else {
+                    ' '
+                };
+                println!("[{}]{}  {:<24}{} &", job.id, marker, "Running", job.command);
             }
             Some(true)
         }
