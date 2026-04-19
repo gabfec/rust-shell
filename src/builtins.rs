@@ -5,7 +5,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-pub const SHELL_BUILTINS: &[&str] = &["exit", "echo", "type", "pwd", "cd", "history"];
+pub const SHELL_BUILTINS: &[&str] = &["exit", "echo", "type", "pwd", "cd", "history", "jobs"];
 
 // Returns Some(bool) if the command was a builtin (bool is whether to continue the loop).
 // Returns None if the command is not a builtin and should be handled externally.
@@ -85,6 +85,8 @@ pub fn handle_builtin(
             handle_history_command(args, history, last_sync_index);
             Some(true)
         }
+
+        "jobs" => Some(true),
 
         _ => None,
     }
