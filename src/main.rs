@@ -35,12 +35,18 @@ impl Completer for ShellHelper {
             let prefix = &buffer[last_space + 1..];
             let start = last_space + 1;
 
+            let (dir, file_prefix, dir_prefix) = if let Some(slash) = prefix.rfind('/') {
+                (&prefix[..slash + 1], &prefix[slash + 1..], &prefix[..slash + 1])
+            } else {
+                (".", prefix, "")
+            };
+
             let mut matches = Vec::new();
-            if let Ok(entries) = fs::read_dir(".") {
+            if let Ok(entries) = fs::read_dir(dir) {
                 for entry in entries.flatten() {
                     let name = entry.file_name().to_string_lossy().into_owned();
-                    if name.starts_with(prefix) {
-                        matches.push(name);
+                    if name.starts_with(file_prefix) {
+                        matches.push(format!("{}{}", dir_prefix, name));
                     }
                 }
             }
