@@ -1,12 +1,13 @@
 use crate::builtins::{SHELL_BUILTINS, handle_builtin, run_builtin_capture};
 use crate::parser::{CommandContext, tokenize};
 use crate::utils::find_in_path;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 
 pub struct Job {
     pub id: usize,
-    pub pid: u32,
+    pub _pid: u32,
     pub command: String,
+    pub child: Child,
 }
 
 // Helper to turn a String into a Stdio source (for builtins in the middle of pipes)
@@ -56,8 +57,9 @@ fn execute_command(input: &str, history: &mut Vec<String>, sync_idx: &mut usize,
                 Ok(child) => {
                     let job_id = *next_job_id;
                     *next_job_id += 1;
-                    println!("[{}] {}", job_id, child.id());
-                    jobs.push(Job { id: job_id, pid: child.id(), command: command_str });
+                    let pid = child.id();
+                    println!("[{}] {}", job_id, pid);
+                    jobs.push(Job { id: job_id, _pid: pid, command: command_str, child });
                 }
                 Err(e) => eprintln!("{}: {}", command, e),
             }

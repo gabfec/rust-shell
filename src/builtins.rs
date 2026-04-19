@@ -89,6 +89,14 @@ pub fn handle_builtin(
         }
 
         "jobs" => {
+            // Check exit status of each job (non-blocking)
+            let mut done_ids = Vec::new();
+            for job in jobs.iter_mut() {
+                if let Ok(Some(_)) = job.child.try_wait() {
+                    done_ids.push(job.id);
+                }
+            }
+
             let n = jobs.len();
             for (i, job) in jobs.iter().enumerate() {
                 let marker = if i == n - 1 {
@@ -98,8 +106,15 @@ pub fn handle_builtin(
                 } else {
                     ' '
                 };
-                println!("[{}]{}  {:<24}{} &", job.id, marker, "Running", job.command);
+                if done_ids.contains(&job.id) {
+                    println!("[{}]{}  {:<24}{}", job.id, marker, "Done", job.command);
+                } else {
+                    println!("[{}]{}  {:<24}{} &", job.id, marker, "Running", job.command);
+                }
             }
+
+            // Remove completed jobs
+            jobs.retain(|j| !done_ids.contains(&j.id));
             Some(true)
         }
 
