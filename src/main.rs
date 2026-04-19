@@ -4,7 +4,7 @@ mod parser;
 mod utils;
 
 use crate::builtins::SHELL_BUILTINS;
-use crate::executor::execute_pipeline;
+use crate::executor::{Job, execute_pipeline};
 use crate::utils::is_executable;
 use rustyline::Helper;
 use rustyline::completion::Completer;
@@ -138,6 +138,7 @@ fn main() -> rustyline::Result<()> {
 
     let mut history: Vec<String> = Vec::new();
     let mut next_job_id = 1;
+    let mut jobs: Vec<Job> = Vec::new();
 
     // Startup load
     load_startup_history(&mut history, &mut rl);
@@ -159,7 +160,7 @@ fn main() -> rustyline::Result<()> {
                 let command = trimmed.to_string();
                 history.push(command); // Record the command
 
-                if !execute_pipeline(trimmed, &mut history, &mut last_sync_index, &mut next_job_id) {
+                if !execute_pipeline(trimmed, &mut history, &mut last_sync_index, &mut next_job_id, &mut jobs) {
                     break;
                 }
             }

@@ -3,6 +3,12 @@ use crate::parser::{CommandContext, tokenize};
 use crate::utils::find_in_path;
 use std::process::{Command, Stdio};
 
+pub struct Job {
+    pub id: usize,
+    pub pid: u32,
+    pub command: String,
+}
+
 // Helper to turn a String into a Stdio source (for builtins in the middle of pipes)
 fn string_to_stdio(input: String) -> Stdio {
     let mut child = Command::new("printf")
@@ -13,7 +19,7 @@ fn string_to_stdio(input: String) -> Stdio {
     Stdio::from(child.stdout.take().unwrap())
 }
 
-fn execute_command(input: &str, history: &mut Vec<String>, sync_idx: &mut usize, next_job_id: &mut usize) -> bool {
+fn execute_command(input: &str, history: &mut Vec<String>, sync_idx: &mut usize, next_job_id: &mut usize, jobs: &mut Vec<Job>) -> bool {
     let mut argv = tokenize(input);
     if argv.is_empty() {
         return true;
@@ -24,10 +30,11 @@ fn execute_command(input: &str, history: &mut Vec<String>, sync_idx: &mut usize,
         argv.pop();
     }
 
+    let command_str = argv.join(" ");
     let ctx = CommandContext::parse(argv);
 
     // Try to run as a builtin first
-    if let Some(should_continue) = handle_builtin(&ctx, history, sync_idx) {
+    if let Some(should_continue) = handle_builtin(&ctx, history, sync_idx, jobs) {
         return should_continue;
     }
 
@@ -50,6 +57,7 @@ fn execute_command(input: &str, history: &mut Vec<String>, sync_idx: &mut usize,
                     let job_id = *next_job_id;
                     *next_job_id += 1;
                     println!("[{}] {}", job_id, child.id());
+                    jobs.push(Job { id: job_id, pid: child.id(), command: command_str });
                 }
                 Err(e) => eprintln!("{}: {}", command, e),
             }
@@ -71,10 +79,11 @@ pub fn execute_pipeline(
     history: &mut Vec<String>,
     last_sync_index: &mut usize,
     next_job_id: &mut usize,
+    jobs: &mut Vec<Job>,
 ) -> bool {
     // Check for pipes
     if !input.contains('|') {
-        return execute_command(input, history, last_sync_index, next_job_id);
+        return execute_command(input, history, last_sync_index, next_job_id, jobs);
     }
 
     // Split into segments

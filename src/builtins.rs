@@ -1,3 +1,4 @@
+use crate::executor::Job;
 use crate::parser::CommandContext;
 use crate::utils::find_in_path;
 use std::env;
@@ -13,6 +14,7 @@ pub fn handle_builtin(
     ctx: &CommandContext,
     history: &mut Vec<String>,
     last_sync_index: &mut usize,
+    jobs: &mut Vec<Job>,
 ) -> Option<bool> {
     let command = ctx.argv[0].as_str();
     let args = &ctx.argv[1..];
@@ -86,7 +88,12 @@ pub fn handle_builtin(
             Some(true)
         }
 
-        "jobs" => Some(true),
+        "jobs" => {
+            for job in jobs.iter() {
+                println!("[{}]+  {:<24}{} &", job.id, "Running", job.command);
+            }
+            Some(true)
+        }
 
         _ => None,
     }
