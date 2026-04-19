@@ -46,20 +46,16 @@ impl Completer for ShellHelper {
                 for entry in entries.flatten() {
                     let name = entry.file_name().to_string_lossy().into_owned();
                     if name.starts_with(file_prefix) {
-                        matches.push(format!("{}{}", dir_prefix, name));
+                        let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+                        let suffix = if is_dir { "/" } else { " " };
+                        matches.push(format!("{}{}{}", dir_prefix, name, suffix));
                     }
                 }
             }
 
             matches.sort();
 
-            if matches.len() == 1 {
-                let mut completion = matches[0].clone();
-                completion.push(' ');
-                return Ok((start, vec![completion]));
-            } else {
-                return Ok((start, matches));
-            }
+            return Ok((start, matches));
         }
 
         // No space: complete command (builtins + PATH)
