@@ -137,6 +137,7 @@ fn main() -> rustyline::Result<()> {
     rl.set_completion_type(rustyline::CompletionType::List);
 
     let mut history: Vec<String> = Vec::new();
+    let mut next_job_id = 1;
 
     // Startup load
     load_startup_history(&mut history, &mut rl);
@@ -158,7 +159,7 @@ fn main() -> rustyline::Result<()> {
                 let command = trimmed.to_string();
                 history.push(command); // Record the command
 
-                if !execute_pipeline(trimmed, &mut history, &mut last_sync_index) {
+                if !execute_pipeline(trimmed, &mut history, &mut last_sync_index, &mut next_job_id) {
                     break;
                 }
             }

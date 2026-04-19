@@ -13,10 +13,15 @@ fn string_to_stdio(input: String) -> Stdio {
     Stdio::from(child.stdout.take().unwrap())
 }
 
-fn execute_command(input: &str, history: &mut Vec<String>, sync_idx: &mut usize) -> bool {
-    let argv = tokenize(input);
+fn execute_command(input: &str, history: &mut Vec<String>, sync_idx: &mut usize, next_job_id: &mut usize) -> bool {
+    let mut argv = tokenize(input);
     if argv.is_empty() {
         return true;
+    }
+
+    let background = argv.last().map(|s| s == "&").unwrap_or(false);
+    if background {
+        argv.pop();
     }
 
     let ctx = CommandContext::parse(argv);
@@ -26,7 +31,7 @@ fn execute_command(input: &str, history: &mut Vec<String>, sync_idx: &mut usize)
         return should_continue;
     }
 
-    // 2. Otherwise, look for an external executable
+    // Otherwise, look for an external executable
     let command = &ctx.argv[0];
     if let Some(_path) = find_in_path(command) {
         let mut cmd = Command::new(command);
@@ -39,9 +44,20 @@ fn execute_command(input: &str, history: &mut Vec<String>, sync_idx: &mut usize)
             cmd.stderr(file);
         }
 
-        match cmd.status() {
-            Ok(_) => {}
-            Err(e) => eprintln!("{}: {}", command, e),
+        if background {
+            match cmd.spawn() {
+                Ok(child) => {
+                    let job_id = *next_job_id;
+                    *next_job_id += 1;
+                    println!("[{}] {}", job_id, child.id());
+                }
+                Err(e) => eprintln!("{}: {}", command, e),
+            }
+        } else {
+            match cmd.status() {
+                Ok(_) => {}
+                Err(e) => eprintln!("{}: {}", command, e),
+            }
         }
     } else {
         eprintln!("{}: not found", command);
@@ -54,10 +70,11 @@ pub fn execute_pipeline(
     input: &str,
     history: &mut Vec<String>,
     last_sync_index: &mut usize,
+    next_job_id: &mut usize,
 ) -> bool {
     // Check for pipes
     if !input.contains('|') {
-        return execute_command(input, history, last_sync_index);
+        return execute_command(input, history, last_sync_index, next_job_id);
     }
 
     // Split into segments
