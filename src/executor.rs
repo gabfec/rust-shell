@@ -20,7 +20,7 @@ fn string_to_stdio(input: String) -> Stdio {
     Stdio::from(child.stdout.take().unwrap())
 }
 
-fn execute_command(input: &str, history: &mut Vec<String>, sync_idx: &mut usize, next_job_id: &mut usize, jobs: &mut Vec<Job>) -> bool {
+fn execute_command(input: &str, history: &mut Vec<String>, sync_idx: &mut usize, jobs: &mut Vec<Job>) -> bool {
     let mut argv = tokenize(input);
     if argv.is_empty() {
         return true;
@@ -55,8 +55,20 @@ fn execute_command(input: &str, history: &mut Vec<String>, sync_idx: &mut usize,
         if background {
             match cmd.spawn() {
                 Ok(child) => {
-                    let job_id = *next_job_id;
-                    *next_job_id += 1;
+                    // Calculate smallest available ID
+                    let mut job_id = 1;
+                    let mut current_ids: Vec<usize> = jobs.iter().map(|j| j.id).collect();
+                    current_ids.sort();
+
+                    for &id in &current_ids {
+                        if id == job_id {
+                            job_id += 1;
+                        } else if id > job_id {
+                            // Found a gap, use this one
+                            break;
+                        }
+                    }
+
                     let pid = child.id();
                     println!("[{}] {}", job_id, pid);
                     jobs.push(Job { id: job_id, _pid: pid, command: command_str, child });
@@ -80,12 +92,11 @@ pub fn execute_pipeline(
     input: &str,
     history: &mut Vec<String>,
     last_sync_index: &mut usize,
-    next_job_id: &mut usize,
     jobs: &mut Vec<Job>,
 ) -> bool {
     // Check for pipes
     if !input.contains('|') {
-        return execute_command(input, history, last_sync_index, next_job_id, jobs);
+        return execute_command(input, history, last_sync_index, jobs);
     }
 
     // Split into segments
