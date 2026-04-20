@@ -3,7 +3,7 @@ mod executor;
 mod parser;
 mod utils;
 
-use crate::builtins::SHELL_BUILTINS;
+use crate::builtins::{SHELL_BUILTINS, reap_jobs, print_jobs};
 use crate::executor::{Job, execute_pipeline};
 use crate::utils::is_executable;
 use rustyline::Helper;
@@ -145,6 +145,9 @@ fn main() -> rustyline::Result<()> {
     let mut last_sync_index = history.len(); // Tracks what has been written to disk
 
     loop {
+        let job_entries = reap_jobs(&mut jobs);
+        print_jobs(&job_entries, false);
+
         let readline = rl.readline("$ ");
 
         match readline {

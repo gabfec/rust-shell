@@ -89,32 +89,8 @@ pub fn handle_builtin(
         }
 
         "jobs" => {
-            // Check exit status of each job (non-blocking)
-            let mut done_ids = Vec::new();
-            for job in jobs.iter_mut() {
-                if let Ok(Some(_)) = job.child.try_wait() {
-                    done_ids.push(job.id);
-                }
-            }
-
-            let n = jobs.len();
-            for (i, job) in jobs.iter().enumerate() {
-                let marker = if i == n - 1 {
-                    '+'
-                } else if i == n - 2 {
-                    '-'
-                } else {
-                    ' '
-                };
-                if done_ids.contains(&job.id) {
-                    println!("[{}]{}  {:<24}{}", job.id, marker, "Done", job.command);
-                } else {
-                    println!("[{}]{}  {:<24}{} &", job.id, marker, "Running", job.command);
-                }
-            }
-
-            // Remove completed jobs
-            jobs.retain(|j| !done_ids.contains(&j.id));
+            let job_entries = reap_jobs(jobs);
+            print_jobs(&job_entries, true);
             Some(true)
         }
 
@@ -168,6 +144,43 @@ fn handle_history_command(args: &[String], history: &mut Vec<String>, last_sync_
         }
     }
 }
+
+pub struct JobEntry {
+    id: usize,
+    marker: char,
+    command: String,
+    done: bool,
+}
+
+/// Polls each job's exit status, removes done jobs, and returns entries with markers.
+pub fn reap_jobs(jobs: &mut Vec<Job>) -> Vec<JobEntry> {
+    let n = jobs.len();
+    let mut done_ids = Vec::new();
+    for job in jobs.iter_mut() {
+        if let Ok(Some(_)) = job.child.try_wait() {
+            done_ids.push(job.id);
+        }
+    }
+    let entries = jobs.iter().enumerate().map(|(i, job)| JobEntry {
+        id: job.id,
+        marker: if i == n - 1 { '+' } else if i == n - 2 { '-' } else { ' ' },
+        command: job.command.clone(),
+        done: done_ids.contains(&job.id),
+    }).collect();
+    jobs.retain(|j| !done_ids.contains(&j.id));
+    entries
+}
+
+pub fn print_jobs(entries: &[JobEntry], show_running: bool) {
+    for e in entries {
+        if e.done {
+            println!("[{}]{}  {:<24}{}", e.id, e.marker, "Done", e.command);
+        } else if show_running {
+            println!("[{}]{}  {:<24}{} &", e.id, e.marker, "Running", e.command);
+        }
+    }
+}
+
 
 // Helper for pipeline capturing (Builtins inside pipes)
 pub fn run_builtin_capture(ctx: &CommandContext) -> String {
