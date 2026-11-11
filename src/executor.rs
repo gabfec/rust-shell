@@ -1,14 +1,8 @@
 use crate::builtins::{SHELL_BUILTINS, handle_builtin, run_builtin_capture};
 use crate::parser::{CommandContext, tokenize};
+use crate::shell::{Flow, Shell};
 use crate::utils::find_in_path;
-use std::process::{Child, Command, Stdio};
-
-pub struct Job {
-    pub id: usize,
-    pub _pid: u32,
-    pub command: String,
-    pub child: Child,
-}
+use std::process::{Command, Stdio};
 
 // Helper to turn a String into a Stdio source (for builtins in the middle of pipes)
 fn string_to_stdio(input: String) -> Stdio {
@@ -20,10 +14,10 @@ fn string_to_stdio(input: String) -> Stdio {
     Stdio::from(child.stdout.take().unwrap())
 }
 
-fn execute_command(input: &str, history: &mut Vec<String>, sync_idx: &mut usize, jobs: &mut Vec<Job>) -> bool {
+fn execute_command(input: &str, shell: &mut Shell) -> Flow {
     let mut argv = tokenize(input);
     if argv.is_empty() {
-        return true;
+        return Flow::Continue;
     }
 
     let background = argv.last().map(|s| s == "&").unwrap_or(false);
@@ -35,8 +29,8 @@ fn execute_command(input: &str, history: &mut Vec<String>, sync_idx: &mut usize,
     let ctx = CommandContext::parse(argv);
 
     // Try to run as a builtin first
-    if let Some(should_continue) = handle_builtin(&ctx, history, sync_idx, jobs) {
-        return should_continue;
+    if let Some(flow) = handle_builtin(&ctx, shell) {
+        return flow;
     }
 
     // Otherwise, look for an external executable
@@ -55,23 +49,9 @@ fn execute_command(input: &str, history: &mut Vec<String>, sync_idx: &mut usize,
         if background {
             match cmd.spawn() {
                 Ok(child) => {
-                    // Calculate smallest available ID
-                    let mut job_id = 1;
-                    let mut current_ids: Vec<usize> = jobs.iter().map(|j| j.id).collect();
-                    current_ids.sort();
-
-                    for &id in &current_ids {
-                        if id == job_id {
-                            job_id += 1;
-                        } else if id > job_id {
-                            // Found a gap, use this one
-                            break;
-                        }
-                    }
-
                     let pid = child.id();
+                    let job_id = shell.jobs.add(command_str, vec![child]);
                     println!("[{}] {}", job_id, pid);
-                    jobs.push(Job { id: job_id, _pid: pid, command: command_str, child });
                 }
                 Err(e) => eprintln!("{}: {}", command, e),
             }
@@ -85,18 +65,13 @@ fn execute_command(input: &str, history: &mut Vec<String>, sync_idx: &mut usize,
         eprintln!("{}: not found", command);
     }
 
-    true
+    Flow::Continue
 }
 
-pub fn execute_pipeline(
-    input: &str,
-    history: &mut Vec<String>,
-    last_sync_index: &mut usize,
-    jobs: &mut Vec<Job>,
-) -> bool {
+pub fn execute_pipeline(shell: &mut Shell, input: &str) -> Flow {
     // Check for pipes
     if !input.contains('|') {
-        return execute_command(input, history, last_sync_index, jobs);
+        return execute_command(input, shell);
     }
 
     // Split into segments
@@ -142,5 +117,5 @@ pub fn execute_pipeline(
     for mut child in children {
         let _ = child.wait();
     }
-    true
+    Flow::Continue
 }

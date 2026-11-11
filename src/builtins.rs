@@ -1,26 +1,21 @@
-use crate::executor::Job;
+use crate::jobs::print_jobs;
 use crate::parser::CommandContext;
+use crate::shell::{Flow, Shell};
 use crate::utils::find_in_path;
 use std::env;
-use std::fs;
-use std::io::Write;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 pub const SHELL_BUILTINS: &[&str] = &["exit", "echo", "type", "pwd", "cd", "history", "jobs"];
 
-// Returns Some(bool) if the command was a builtin (bool is whether to continue the loop).
+// Returns Some(flow) if the command was a builtin.
 // Returns None if the command is not a builtin and should be handled externally.
-pub fn handle_builtin(
-    ctx: &CommandContext,
-    history: &mut Vec<String>,
-    last_sync_index: &mut usize,
-    jobs: &mut Vec<Job>,
-) -> Option<bool> {
+pub fn handle_builtin(ctx: &CommandContext, shell: &mut Shell) -> Option<Flow> {
     let command = ctx.argv[0].as_str();
     let args = &ctx.argv[1..];
 
     match command {
-        "exit" => Some(false),
+        "exit" => Some(Flow::Exit),
 
         "echo" => {
             let output = args.join(" ");
@@ -29,7 +24,7 @@ pub fn handle_builtin(
             } else {
                 println!("{}", output);
             }
-            Some(true)
+            Some(Flow::Continue)
         }
 
         "type" => {
@@ -50,7 +45,7 @@ pub fn handle_builtin(
             } else {
                 println!("{}", res);
             }
-            Some(true)
+            Some(Flow::Continue)
         }
 
         "pwd" => {
@@ -60,7 +55,7 @@ pub fn handle_builtin(
             } else {
                 println!("{}", res);
             }
-            Some(true)
+            Some(Flow::Continue)
         }
 
         "cd" => {
@@ -80,107 +75,38 @@ pub fn handle_builtin(
                 let display_path = args.get(0).map(|s| s.as_str()).unwrap_or("~");
                 eprintln!("cd: {}: No such file or directory", display_path);
             }
-            Some(true)
+            Some(Flow::Continue)
         }
 
         "history" => {
-            handle_history_command(args, history, last_sync_index);
-            Some(true)
+            handle_history_command(args, shell);
+            Some(Flow::Continue)
         }
 
         "jobs" => {
-            let job_entries = reap_jobs(jobs);
-            print_jobs(&job_entries, true);
-            Some(true)
+            let _ = print_jobs(&shell.jobs.reap(), true, &mut io::stdout());
+            Some(Flow::Continue)
         }
 
         _ => None,
     }
 }
 
-fn handle_history_command(args: &[String], history: &mut Vec<String>, last_sync_index: &mut usize) {
-    let mut args_iter = args.iter();
-    match args_iter.next().map(|s| s.as_str()) {
-        Some("-r") => {
-            if let Some(path) = args_iter.next() {
-                if let Ok(content) = fs::read_to_string(path) {
-                    for line in content.lines() {
-                        if !line.trim().is_empty() {
-                            history.push(line.to_string());
-                        }
-                    }
-                }
-            }
-        }
-        Some("-w") => {
-            if let Some(path) = args_iter.next() {
-                if let Ok(mut file) = fs::File::create(path) {
-                    for entry in history.iter() {
-                        let _ = writeln!(file, "{}", entry);
-                    }
-                    *last_sync_index = history.len();
-                }
-            }
-        }
-        Some("-a") => {
-            if let Some(path) = args_iter.next() {
-                if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(path) {
-                    for i in *last_sync_index..history.len() {
-                        let _ = writeln!(file, "{}", history[i]);
-                    }
-                    *last_sync_index = history.len();
-                }
-            }
-        }
-        arg => {
-            let count = arg.and_then(|s| s.parse::<usize>().ok());
-            let start_index = match count {
-                Some(n) if n < history.len() => history.len() - n,
-                _ => 0,
-            };
-            for i in start_index..history.len() {
-                println!("{:>5}  {}", i + 1, history[i]);
-            }
+fn handle_history_command(args: &[String], shell: &mut Shell) {
+    let history = &mut shell.history;
+    let path = args.get(1);
+    // File errors are silently ignored.
+    match (args.first().map(String::as_str), path) {
+        (Some("-r"), Some(path)) => drop(history.read_from(path)),
+        (Some("-w"), Some(path)) => drop(history.write_to(path)),
+        (Some("-a"), Some(path)) => drop(history.append_to(path)),
+        (Some("-r" | "-w" | "-a"), None) => {}
+        (arg, _) => {
+            let count = arg.and_then(|s| s.parse().ok());
+            let _ = history.print(count, &mut io::stdout());
         }
     }
 }
-
-pub struct JobEntry {
-    id: usize,
-    marker: char,
-    command: String,
-    done: bool,
-}
-
-/// Polls each job's exit status, removes done jobs, and returns entries with markers.
-pub fn reap_jobs(jobs: &mut Vec<Job>) -> Vec<JobEntry> {
-    let n = jobs.len();
-    let mut done_ids = Vec::new();
-    for job in jobs.iter_mut() {
-        if let Ok(Some(_)) = job.child.try_wait() {
-            done_ids.push(job.id);
-        }
-    }
-    let entries = jobs.iter().enumerate().map(|(i, job)| JobEntry {
-        id: job.id,
-        marker: if i == n - 1 { '+' } else if i == n - 2 { '-' } else { ' ' },
-        command: job.command.clone(),
-        done: done_ids.contains(&job.id),
-    }).collect();
-    jobs.retain(|j| !done_ids.contains(&j.id));
-    entries
-}
-
-pub fn print_jobs(entries: &[JobEntry], show_running: bool) {
-    for e in entries {
-        if e.done {
-            println!("[{}]{}  {:<24}{}", e.id, e.marker, "Done", e.command);
-        } else if show_running {
-            println!("[{}]{}  {:<24}{} &", e.id, e.marker, "Running", e.command);
-        }
-    }
-}
-
 
 // Helper for pipeline capturing (Builtins inside pipes)
 pub fn run_builtin_capture(ctx: &CommandContext) -> String {
