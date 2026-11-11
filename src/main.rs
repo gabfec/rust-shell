@@ -5,6 +5,8 @@ mod history;
 mod jobs;
 mod parser;
 mod shell;
+#[cfg(test)]
+mod test_util;
 mod utils;
 
 use crate::completion::ShellHelper;

@@ -4,7 +4,7 @@ use crate::jobs::{JobTable, print_jobs};
 use std::io;
 
 /// Whether the REPL should keep going after a command.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Flow {
     Continue,
     Exit,

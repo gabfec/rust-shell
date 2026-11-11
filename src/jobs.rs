@@ -90,3 +90,92 @@ pub fn print_jobs(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::process::{Command, Stdio};
+
+    /// A process that runs until the job table (and so its stdin) is dropped.
+    fn running() -> Child {
+        Command::new("cat")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .spawn()
+            .unwrap()
+    }
+
+    fn finished() -> Child {
+        let mut child = Command::new("true").spawn().unwrap();
+        child.wait().unwrap();
+        child
+    }
+
+    fn printed(statuses: &[JobStatus], show_running: bool) -> String {
+        let mut out = Vec::new();
+        print_jobs(statuses, show_running, &mut out).unwrap();
+        String::from_utf8(out).unwrap()
+    }
+
+    #[test]
+    fn ids_count_up_from_one() {
+        let mut jobs = JobTable::default();
+        assert_eq!(jobs.add("a".into(), vec![running()]), 1);
+        assert_eq!(jobs.add("b".into(), vec![running()]), 2);
+        assert_eq!(jobs.add("c".into(), vec![running()]), 3);
+    }
+
+    #[test]
+    fn smallest_free_id_is_reused() {
+        let mut jobs = JobTable::default();
+        jobs.add("a".into(), vec![running()]);
+        jobs.add("b".into(), vec![finished()]);
+        jobs.add("c".into(), vec![running()]);
+        jobs.reap(); // removes job 2
+        assert_eq!(jobs.add("d".into(), vec![running()]), 2);
+        assert_eq!(jobs.add("e".into(), vec![running()]), 4);
+    }
+
+    #[test]
+    fn markers_flag_the_two_most_recent_jobs() {
+        let mut jobs = JobTable::default();
+        for name in ["a", "b", "c"] {
+            jobs.add(name.into(), vec![running()]);
+        }
+        let expected = format!(
+            "[1]   {r:<24}a &\n[2]-  {r:<24}b &\n[3]+  {r:<24}c &\n",
+            r = "Running"
+        );
+        assert_eq!(printed(&jobs.reap(), true), expected);
+    }
+
+    #[test]
+    fn finished_jobs_are_reported_once_then_removed() {
+        let mut jobs = JobTable::default();
+        jobs.add("sleeper".into(), vec![running()]);
+        jobs.add("quick".into(), vec![finished()]);
+
+        let statuses = jobs.reap();
+        assert_eq!(
+            printed(&statuses, false),
+            format!("[2]+  {:<24}quick\n", "Done")
+        );
+        assert_eq!(
+            printed(&jobs.reap(), true),
+            format!("[1]+  {:<24}sleeper &\n", "Running")
+        );
+    }
+
+    #[test]
+    fn a_pipeline_job_is_done_only_when_every_process_is() {
+        let mut jobs = JobTable::default();
+        jobs.add("a | b".into(), vec![finished(), running()]);
+        assert!(printed(&jobs.reap(), false).is_empty());
+
+        jobs.add("c | d".into(), vec![finished(), finished()]);
+        assert_eq!(
+            printed(&jobs.reap(), false),
+            format!("[2]+  {:<24}c | d\n", "Done")
+        );
+    }
+}
