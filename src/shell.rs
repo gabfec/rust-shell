@@ -1,4 +1,4 @@
-use crate::executor::execute_pipeline;
+use crate::executor::run_pipeline;
 use crate::history::History;
 use crate::jobs::{JobTable, print_jobs};
 use std::io;
@@ -21,7 +21,7 @@ impl Shell {
     /// Records `line` in the history and runs it.
     pub fn run(&mut self, line: &str) -> Flow {
         self.history.push(line);
-        execute_pipeline(self, line)
+        run_pipeline(self, line)
     }
 
     /// Prints (and forgets) background jobs that finished since last time.

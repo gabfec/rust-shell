@@ -51,6 +51,13 @@ pub fn tokenize(input: &str) -> Vec<String> {
     tokens
 }
 
+/// Splits a command line into the stages of a pipeline.
+pub fn parse_pipeline(line: &str) -> Vec<CommandContext> {
+    line.split('|')
+        .map(|segment| CommandContext::parse(tokenize(segment)))
+        .collect()
+}
+
 pub struct CommandContext {
     pub argv: Vec<String>,
     pub stdout_file: Option<File>,
