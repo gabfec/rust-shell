@@ -164,11 +164,23 @@ fn declare(
     }
 
     for word in words {
-        if let Some((name, value)) = word.split_once('=') {
+        let (name, value) = word.split_once('=').unwrap_or((word, ""));
+        if !is_valid_name(name) {
+            writeln!(err, "declare: `{}': not a valid identifier", word)?;
+        } else if word.contains('=') {
             shell.variables.insert(name.to_string(), value.to_string());
         }
     }
     Ok(())
+}
+
+/// A letter or `_`, followed by letters, digits or `_`.
+pub fn is_valid_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 /// Prints a variable the way bash's `declare -p` does, escaping the
@@ -437,6 +449,37 @@ mod tests {
             run(&mut shell, &["declare", "-p"]).1,
             "declare -- a=\"1\"\ndeclare -- b=\"2\"\n"
         );
+    }
+
+    #[test]
+    fn declare_rejects_invalid_names() {
+        let mut shell = Shell::default();
+        for word in ["23=x", "pear-grape=orange", "=x", "a b=c", "5raspberry"] {
+            let (flow, out, err) = run(&mut shell, &["declare", word]);
+            assert_eq!(flow, Flow::Continue);
+            assert_eq!(out, "");
+            assert_eq!(err, format!("declare: `{word}': not a valid identifier\n"));
+        }
+        assert!(shell.variables.is_empty());
+    }
+
+    #[test]
+    fn declare_accepts_underscores_and_digits_after_the_first_char() {
+        let mut shell = Shell::default();
+        let (_, _, err) = run(&mut shell, &["declare", "_FOO=bar", "x9_y=1", "_=u"]);
+        assert_eq!(err, "");
+        assert_eq!(shell.variables.len(), 3);
+        assert_eq!(
+            run(&mut shell, &["declare", "-p", "_FOO"]).1,
+            "declare -- _FOO=\"bar\"\n"
+        );
+    }
+
+    #[test]
+    fn declare_rejects_bad_words_but_keeps_good_ones() {
+        let mut shell = Shell::default();
+        run(&mut shell, &["declare", "ok=1", "1bad=2", "fine=3"]);
+        assert_eq!(shell.variables.keys().collect::<Vec<_>>(), ["fine", "ok"]);
     }
 
     #[test]
