@@ -37,7 +37,11 @@ impl ShellHelper {
 
             let command = buffer.split_whitespace().next().unwrap_or_default();
             if let Some(script) = self.completers.get(command) {
-                return (start, run_completer(script));
+                let previous = buffer[..last_space]
+                    .split_whitespace()
+                    .next_back()
+                    .unwrap_or_default();
+                return (start, run_completer(script, &[command, prefix, previous]));
             }
 
             let (dir, file_prefix, dir_prefix) = if let Some(slash) = prefix.rfind('/') {
@@ -113,13 +117,15 @@ impl ShellHelper {
     }
 }
 
-/// Runs a `complete -C` script and turns each non-blank line it prints into
+/// Runs a `complete -C` script with bash's arguments (the command name, the
+/// word being completed, and the word before it) and turns each non-blank line it prints into
 /// a candidate. A single candidate gets a trailing space, like a finished
 /// word. No candidates (including a script that fails to run) means
 /// rustyline rings the bell and leaves the line alone; there is
 /// deliberately no fallback to filename completion.
-fn run_completer(script: &str) -> Vec<String> {
+fn run_completer(script: &str, args: &[&str; 3]) -> Vec<String> {
     let Ok(output) = Command::new(script)
+        .args(args)
         .stdin(Stdio::null())
         .stderr(Stdio::null())
         .output()
@@ -166,6 +172,17 @@ mod tests {
             helper.complete_buffer("git "),
             (4, vec!["add ".to_string()])
         );
+    }
+
+    #[test]
+    fn completer_gets_command_current_and_previous_word() {
+        let dir = temp_dir("complete-argv");
+        let helper = helper_with("git", script(&dir, "c", r#"echo "[$1|$2|$3|$#]""#));
+        let complete = |buffer| helper.complete_buffer(buffer).1;
+        assert_eq!(complete("git remote set"), ["[git|set|remote|3] "]);
+        assert_eq!(complete("git remote "), ["[git||remote|3] "]);
+        assert_eq!(complete("git  "), ["[git||git|3] "]);
+        assert_eq!(complete("git x"), ["[git|x|git|3] "]);
     }
 
     #[test]
