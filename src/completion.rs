@@ -22,14 +22,15 @@ impl Completer for ShellHelper {
         pos: usize,
         _ctx: &Context<'_>,
     ) -> rustyline::Result<(usize, Vec<String>)> {
-        Ok(self.complete_buffer(&line[..pos]))
+        Ok(self.complete_at(line, pos))
     }
 }
 
 impl ShellHelper {
-    /// Completes the text before the cursor. Returns where the replaced
-    /// word starts and the candidates for it.
-    fn complete_buffer(&self, buffer: &str) -> (usize, Vec<String>) {
+    /// Completes the word before the cursor at byte offset `pos`. Returns
+    /// where the replaced word starts and the candidates for it.
+    fn complete_at(&self, line: &str, pos: usize) -> (usize, Vec<String>) {
+        let buffer = &line[..pos];
         // If there's a space, we're completing an argument
         if let Some(last_space) = buffer.rfind(' ') {
             let prefix = &buffer[last_space + 1..];
@@ -41,7 +42,8 @@ impl ShellHelper {
                     .split_whitespace()
                     .next_back()
                     .unwrap_or_default();
-                return (start, run_completer(script, &[command, prefix, previous]));
+                let args = [command, prefix, previous];
+                return (start, run_completer(script, &args, line, pos));
             }
 
             let (dir, file_prefix, dir_prefix) = if let Some(slash) = prefix.rfind('/') {
@@ -118,14 +120,18 @@ impl ShellHelper {
 }
 
 /// Runs a `complete -C` script with bash's arguments (the command name, the
-/// word being completed, and the word before it) and turns each non-blank line it prints into
+/// word being completed, and the word before it) and environment
+/// (`COMP_LINE`, the whole line, and `COMP_POINT`, the cursor's byte
+/// offset), and turns each non-blank line it prints into
 /// a candidate. A single candidate gets a trailing space, like a finished
 /// word. No candidates (including a script that fails to run) means
 /// rustyline rings the bell and leaves the line alone; there is
 /// deliberately no fallback to filename completion.
-fn run_completer(script: &str, args: &[&str; 3]) -> Vec<String> {
+fn run_completer(script: &str, args: &[&str; 3], line: &str, pos: usize) -> Vec<String> {
     let Ok(output) = Command::new(script)
         .args(args)
+        .env("COMP_LINE", line)
+        .env("COMP_POINT", pos.to_string())
         .stdin(Stdio::null())
         .stderr(Stdio::null())
         .output()
@@ -155,7 +161,31 @@ mod tests {
         let path = dir.join(name);
         fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        wait_until_executable(&path);
         path.display().to_string()
+    }
+
+    /// Tests run in parallel threads, so another test's fork can briefly
+    /// inherit our write handle to the new script, making exec fail with
+    /// ETXTBSY. Once one exec succeeds, nothing holds it open any more.
+    fn wait_until_executable(path: &Path) {
+        const ETXTBSY: i32 = 26;
+        for _ in 0..100 {
+            match Command::new(path).stdout(Stdio::null()).status() {
+                Err(e) if e.raw_os_error() == Some(ETXTBSY) => {
+                    std::thread::sleep(std::time::Duration::from_millis(5))
+                }
+                _ => return,
+            }
+        }
+        panic!("{} stayed busy", path.display());
+    }
+
+    impl ShellHelper {
+        /// Completes with the cursor at the end of `buffer`.
+        fn complete_buffer(&self, buffer: &str) -> (usize, Vec<String>) {
+            self.complete_at(buffer, buffer.len())
+        }
     }
 
     fn helper_with(command: &str, script: String) -> ShellHelper {
@@ -183,6 +213,21 @@ mod tests {
         assert_eq!(complete("git remote "), ["[git||remote|3] "]);
         assert_eq!(complete("git  "), ["[git||git|3] "]);
         assert_eq!(complete("git x"), ["[git|x|git|3] "]);
+    }
+
+    #[test]
+    fn completer_gets_comp_line_and_comp_point() {
+        let dir = temp_dir("complete-env");
+        let helper = helper_with(
+            "git",
+            script(&dir, "c", r#"echo "[$COMP_LINE|$COMP_POINT]""#),
+        );
+        assert_eq!(helper.complete_buffer("git ad").1, ["[git ad|6] "]);
+        // Cursor in the middle: COMP_LINE is still the whole line.
+        assert_eq!(
+            helper.complete_at("git st --all", 6),
+            (4, vec!["[git st --all|6] ".to_string()])
+        );
     }
 
     #[test]
