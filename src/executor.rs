@@ -12,8 +12,9 @@ use std::thread;
 pub fn run_pipeline(shell: &mut Shell, line: &str) -> Flow {
     let pipeline = parse(line, &|name| shell.variable(name));
     // Every redirection is opened (creating its file) before anything runs.
-    let stages: Vec<Stage> = pipeline.stages.into_iter().map(Stage::open).collect();
-    if stages.iter().any(|stage| stage.argv.is_empty()) {
+    // A stage whose redirection fails is reported and left out (`None`).
+    let stages: Vec<Option<Stage>> = pipeline.stages.into_iter().map(Stage::open).collect();
+    if stages.iter().flatten().any(|stage| stage.argv.is_empty()) {
         return Flow::Continue;
     }
 
@@ -28,6 +29,9 @@ pub fn run_pipeline(shell: &mut Shell, line: &str) -> Flow {
         // A stage after one that produced no pipe (redirected to a file,
         // or failed to start) reads nothing instead of the terminal.
         let stdin = (i > 0).then(|| prev_stdout.take().unwrap_or_else(Stdio::null));
+        let Some(stage) = stage else {
+            continue;
+        };
 
         if is_builtin(&stage.argv[0]) {
             // Builtins don't read stdin.
@@ -69,14 +73,30 @@ struct Stage {
 }
 
 impl Stage {
-    /// Opens the command's redirections. One that can't be opened is
-    /// ignored, and the stream stays where it was.
-    fn open(command: SimpleCommand) -> Self {
-        Stage {
-            stdout: command.stdout.as_ref().and_then(|t| open_target(t).ok()),
-            stderr: command.stderr.as_ref().and_then(|t| open_target(t).ok()),
+    /// Opens the command's redirections. If one can't be opened, reports
+    /// it like bash (`<path>: <reason>`) and returns `None`: the command
+    /// must not run.
+    fn open(command: SimpleCommand) -> Option<Self> {
+        let open = |target: &Option<Target>| match target {
+            None => Ok(None),
+            Some(target) => open_target(target).map(Some).map_err(|e| {
+                eprintln!("{}: {}", target.path, describe(&e));
+            }),
+        };
+        Some(Stage {
+            stdout: open(&command.stdout).ok()?,
+            stderr: open(&command.stderr).ok()?,
             argv: command.argv,
-        }
+        })
+    }
+}
+
+/// An I/O error's message without the "(os error N)" suffix.
+fn describe(error: &io::Error) -> String {
+    let message = error.to_string();
+    match message.find(" (os error") {
+        Some(end) => message[..end].to_string(),
+        None => message,
     }
 }
 
@@ -183,6 +203,13 @@ mod tests {
     #[test]
     fn double_redirect_appends() {
         assert_eq!(write_through("redirect-append", true), "old\nnew\n");
+    }
+
+    #[test]
+    fn os_error_suffix_is_dropped() {
+        let error = fs::File::open("/no/such/file").unwrap_err();
+        assert_eq!(describe(&error), "No such file or directory");
+        assert_eq!(describe(&io::Error::other("custom")), "custom");
     }
 
     #[test]

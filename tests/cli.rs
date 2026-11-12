@@ -293,3 +293,29 @@ fn redirect_without_spaces() {
     assert!(r.stdout.starts_with("hi\nls: "), "{:?}", r.stdout);
     assert_eq!(r.stderr, "");
 }
+
+#[test]
+fn failed_redirect_is_reported_and_command_skipped() {
+    let r = run(
+        "redir-fail",
+        "echo hi > /no/such/dir/f\necho err 2>> /no/such/dir/e\necho after\n",
+    );
+    assert_eq!(r.stdout, "after\n");
+    assert_eq!(
+        r.stderr,
+        "/no/such/dir/f: No such file or directory\n/no/such/dir/e: No such file or directory\n"
+    );
+}
+
+#[test]
+fn failed_redirect_skips_only_its_pipeline_stage() {
+    let r = run(
+        "redir-fail-pipe",
+        "echo a > /no/such/f | cat\necho b | cat > /no/such/g\necho c\n",
+    );
+    assert_eq!(r.stdout, "c\n");
+    assert_eq!(
+        r.stderr,
+        "/no/such/f: No such file or directory\n/no/such/g: No such file or directory\n"
+    );
+}
