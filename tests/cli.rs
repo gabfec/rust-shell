@@ -203,3 +203,17 @@ fn background_job_is_listed_then_reported_done() {
     assert_eq!(lines[1], format!("[1]+  {:<24}sleep 0.2 &", "Running"));
     assert_eq!(lines[2], format!("[1]+  {:<24}sleep 0.2", "Done"));
 }
+
+#[test]
+fn complete_registration_is_printed_normalized() {
+    let r = run(
+        "complete-p",
+        "complete  -C  /path/to/script   git\ncomplete   -C /other    docker\n\
+         complete -p git\ncomplete -p docker\ncomplete -p svn\n",
+    );
+    assert_eq!(
+        r.stdout,
+        "complete -C '/path/to/script' git\ncomplete -C '/other' docker\n"
+    );
+    assert_eq!(r.stderr, "complete: svn: no completion specification\n");
+}

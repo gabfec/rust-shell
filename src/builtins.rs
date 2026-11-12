@@ -31,7 +31,7 @@ pub fn run_builtin(
         "cd" => cd(args, err),
         "history" => history(shell, args, out),
         "jobs" => print_jobs(&shell.jobs.reap(), true, out),
-        "complete" => complete(args, err),
+        "complete" => complete(shell, args, out, err),
         other => unreachable!("{other} is not a builtin"),
     };
     Flow::Continue
@@ -74,13 +74,53 @@ fn cd(args: &[String], err: &mut dyn Write) -> io::Result<()> {
     Ok(())
 }
 
-fn complete(args: &[String], err: &mut dyn Write) -> io::Result<()> {
-    if let [flag, name, ..] = args
-        && flag == "-p"
-    {
-        writeln!(err, "complete: {}: no completion specification", name)?;
+/// `complete -C <script> <name>...` registers a completer script,
+/// `complete -p [<name>...]` prints registrations.
+fn complete(
+    shell: &mut Shell,
+    args: &[String],
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> io::Result<()> {
+    let mut print = false;
+    let mut script = None;
+    let mut names = Vec::new();
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "-p" => print = true,
+            "-C" => match args.next() {
+                Some(path) => script = Some(path),
+                None => return writeln!(err, "complete: -C: option requires an argument"),
+            },
+            _ => names.push(arg),
+        }
+    }
+
+    if print {
+        if names.is_empty() {
+            for (name, script) in &shell.completions {
+                print_completion(name, script, out)?;
+            }
+        }
+        for name in names {
+            match shell.completions.get(name) {
+                Some(script) => print_completion(name, script, out)?,
+                None => writeln!(err, "complete: {}: no completion specification", name)?,
+            }
+        }
+    } else if let Some(script) = script {
+        for name in names {
+            shell.completions.insert(name.clone(), script.clone());
+        }
     }
     Ok(())
+}
+
+/// Prints a registration in the form `complete` accepts as input.
+fn print_completion(name: &str, script: &str, out: &mut dyn Write) -> io::Result<()> {
+    let quoted = script.replace('\'', r"'\''");
+    writeln!(out, "complete -C '{}' {}", quoted, name)
 }
 
 fn history(shell: &mut Shell, args: &[String], out: &mut dyn Write) -> io::Result<()> {
@@ -221,6 +261,40 @@ mod tests {
         let (_, out, err) = run(&mut Shell::default(), &["complete", "-p", "git"]);
         assert_eq!(out, "");
         assert_eq!(err, "complete: git: no completion specification\n");
+    }
+
+    #[test]
+    fn complete_c_registers_and_p_prints_normalized() {
+        let mut shell = Shell::default();
+        let registered = run(&mut shell, &["complete", "-C", "/bin/git-done", "git"]);
+        assert_eq!(registered, (Flow::Continue, String::new(), String::new()));
+        run(&mut shell, &["complete", "-C", "/it's", "docker", "podman"]);
+
+        assert_eq!(
+            run(&mut shell, &["complete", "-p", "git"]).1,
+            "complete -C '/bin/git-done' git\n"
+        );
+        assert_eq!(
+            run(&mut shell, &["complete", "-p", "podman"]).1,
+            "complete -C '/it'\\''s' podman\n"
+        );
+        // Re-registering replaces the script.
+        run(&mut shell, &["complete", "-C", "/new", "git"]);
+        assert_eq!(
+            run(&mut shell, &["complete", "-p"]).1,
+            "complete -C '/it'\\''s' docker\n\
+             complete -C '/new' git\n\
+             complete -C '/it'\\''s' podman\n"
+        );
+    }
+
+    #[test]
+    fn complete_p_mixes_found_and_missing() {
+        let mut shell = Shell::default();
+        run(&mut shell, &["complete", "-C", "/c", "git"]);
+        let (_, out, err) = run(&mut shell, &["complete", "-p", "git", "nope"]);
+        assert_eq!(out, "complete -C '/c' git\n");
+        assert_eq!(err, "complete: nope: no completion specification\n");
     }
 
     #[test]

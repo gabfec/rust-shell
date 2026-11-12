@@ -1,6 +1,7 @@
 use crate::executor::run_pipeline;
 use crate::history::History;
 use crate::jobs::{JobTable, print_jobs};
+use std::collections::BTreeMap;
 use std::io;
 
 /// Whether the REPL should keep going after a command.
@@ -15,6 +16,8 @@ pub enum Flow {
 pub struct Shell {
     pub history: History,
     pub jobs: JobTable,
+    /// Completer scripts registered with `complete -C`, by command name.
+    pub completions: BTreeMap<String, String>,
 }
 
 impl Shell {
