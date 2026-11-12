@@ -22,8 +22,34 @@ impl Completer for ShellHelper {
         pos: usize,
         _ctx: &Context<'_>,
     ) -> rustyline::Result<(usize, Vec<String>)> {
-        Ok(self.complete_at(line, pos))
+        let (start, candidates) = self.complete_at(line, pos);
+        Ok((
+            start,
+            extend_to_common_prefix(&line[start..pos], candidates),
+        ))
     }
+}
+
+/// rustyline rings the bell whenever there are several candidates, even
+/// when it can extend the word to their longest common prefix; bash only
+/// extends. Offering just the prefix makes rustyline insert it silently.
+/// The next TAB then makes no progress, so it rings and lists as usual.
+fn extend_to_common_prefix(word: &str, candidates: Vec<String>) -> Vec<String> {
+    let Some((first, rest)) = candidates.split_first() else {
+        return candidates;
+    };
+    let lcp_len = rest.iter().fold(first.len(), |len, candidate| {
+        first[..len]
+            .char_indices()
+            .zip(candidate.chars())
+            .find(|((_, a), b)| a != b)
+            .map_or(len.min(candidate.len()), |((i, _), _)| i)
+    });
+    let lcp = &first[..lcp_len];
+    if rest.is_empty() || lcp.len() <= word.len() || !lcp.starts_with(word) {
+        return candidates;
+    }
+    vec![lcp.to_string()]
 }
 
 impl ShellHelper {
@@ -242,6 +268,26 @@ mod tests {
             script(&dir, "c", "printf 'push\\nadd\\ncommit\\nadd\\n'"),
         );
         assert_eq!(helper.complete_buffer("git ").1, ["add", "commit", "push"]);
+    }
+
+    #[test]
+    fn common_prefix_longer_than_word_is_offered_alone() {
+        let words = |list: &[&str]| list.iter().map(|w| w.to_string()).collect::<Vec<_>>();
+        let extend = |word, list: &[&str]| extend_to_common_prefix(word, words(list));
+
+        assert_eq!(extend("c", &["checkout", "cherry-pick"]), ["che"]);
+        assert_eq!(extend("", &["xyz_bar", "xyz_baz"]), ["xyz_ba"]);
+        // No progress possible: rustyline should ring and list.
+        assert_eq!(
+            extend("che", &["checkout", "cherry-pick"]),
+            ["checkout", "cherry-pick"]
+        );
+        assert_eq!(extend("", &["add", "commit"]), ["add", "commit"]);
+        // Single and no candidates pass through.
+        assert_eq!(extend("c", &["commit "]), ["commit "]);
+        assert!(extend("c", &[]).is_empty());
+        // Multi-byte characters split on char boundaries.
+        assert_eq!(extend("", &["été", "étais"]), ["ét"]);
     }
 
     #[test]
