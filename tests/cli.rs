@@ -217,3 +217,13 @@ fn complete_registration_is_printed_normalized() {
     );
     assert_eq!(r.stderr, "complete: svn: no completion specification\n");
 }
+
+#[test]
+fn complete_r_unregisters() {
+    let r = run(
+        "complete-r",
+        "complete  -C  /path/to/script  git\ncomplete -r git\ncomplete -p git\n",
+    );
+    assert_eq!(r.stdout, "");
+    assert_eq!(r.stderr, "complete: git: no completion specification\n");
+}

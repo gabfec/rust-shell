@@ -75,7 +75,8 @@ fn cd(args: &[String], err: &mut dyn Write) -> io::Result<()> {
 }
 
 /// `complete -C <script> <name>...` registers a completer script,
-/// `complete -p [<name>...]` prints registrations.
+/// `complete -p [<name>...]` prints registrations, and
+/// `complete -r [<name>...]` removes them (all of them without names).
 fn complete(
     shell: &mut Shell,
     args: &[String],
@@ -83,12 +84,14 @@ fn complete(
     err: &mut dyn Write,
 ) -> io::Result<()> {
     let mut print = false;
+    let mut remove = false;
     let mut script = None;
     let mut names = Vec::new();
     let mut args = args.iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "-p" => print = true,
+            "-r" => remove = true,
             "-C" => match args.next() {
                 Some(path) => script = Some(path),
                 None => return writeln!(err, "complete: -C: option requires an argument"),
@@ -97,7 +100,15 @@ fn complete(
         }
     }
 
-    if print {
+    if remove {
+        if names.is_empty() {
+            shell.completions.clear();
+        }
+        for name in names {
+            // Removing a name that was never registered is not an error.
+            shell.completions.remove(name);
+        }
+    } else if print {
         if names.is_empty() {
             for (name, script) in &shell.completions {
                 print_completion(name, script, out)?;
@@ -295,6 +306,28 @@ mod tests {
         let (_, out, err) = run(&mut shell, &["complete", "-p", "git", "nope"]);
         assert_eq!(out, "complete -C '/c' git\n");
         assert_eq!(err, "complete: nope: no completion specification\n");
+    }
+
+    #[test]
+    fn complete_r_removes_registrations_silently() {
+        let mut shell = Shell::default();
+        for name in ["git", "docker", "svn"] {
+            run(&mut shell, &["complete", "-C", "/c", name]);
+        }
+        let quiet = (Flow::Continue, String::new(), String::new());
+        assert_eq!(run(&mut shell, &["complete", "-r", "git"]), quiet);
+        assert_eq!(
+            run(&mut shell, &["complete", "-r", "never-registered"]),
+            quiet
+        );
+        assert_eq!(
+            run(&mut shell, &["complete", "-p", "git"]).2,
+            "complete: git: no completion specification\n"
+        );
+        assert_eq!(shell.completions.len(), 2);
+
+        run(&mut shell, &["complete", "-r"]);
+        assert!(shell.completions.is_empty());
     }
 
     #[test]
