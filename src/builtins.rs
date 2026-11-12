@@ -32,7 +32,7 @@ pub fn run_builtin(
         "history" => history(shell, args, out),
         "jobs" => print_jobs(&shell.jobs.reap(), true, out),
         "complete" => complete(shell, args, out, err),
-        "declare" => Ok(()),
+        "declare" => declare(args, err),
         other => unreachable!("{other} is not a builtin"),
     };
     Flow::Continue
@@ -133,6 +133,18 @@ fn complete(
 fn print_completion(name: &str, script: &str, out: &mut dyn Write) -> io::Result<()> {
     let quoted = script.replace('\'', r"'\''");
     writeln!(out, "complete -C '{}' {}", quoted, name)
+}
+
+/// `declare -p <name>...` prints variables.
+fn declare(args: &[String], err: &mut dyn Write) -> io::Result<()> {
+    if let [flag, names @ ..] = args
+        && flag == "-p"
+    {
+        for name in names {
+            writeln!(err, "declare: {}: not found", name)?;
+        }
+    }
+    Ok(())
 }
 
 fn history(shell: &mut Shell, args: &[String], out: &mut dyn Write) -> io::Result<()> {
@@ -329,6 +341,13 @@ mod tests {
 
         run(&mut shell, &["complete", "-r"]);
         assert!(shell.completions.is_empty());
+    }
+
+    #[test]
+    fn declare_p_reports_missing_variable() {
+        let (_, out, err) = run(&mut Shell::default(), &["declare", "-p", "missing"]);
+        assert_eq!(out, "");
+        assert_eq!(err, "declare: missing: not found\n");
     }
 
     #[test]
