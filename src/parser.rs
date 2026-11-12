@@ -4,11 +4,25 @@ use std::str::Chars;
 /// Looks up a variable's value for `$NAME` expansion.
 pub type Lookup<'a> = &'a dyn Fn(&str) -> Option<String>;
 
-/// Splits a command into words, removing quotes and backslashes and
-/// expanding `$NAME` outside single quotes. A word that ends up empty is
+/// A lexical token of a command line.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Token {
+    /// A word, with quotes and backslashes removed and variables expanded.
+    Word(String),
+    /// `|`
+    Pipe,
+    /// `&`
+    Background,
+    /// `>`, `>>`, `1>`, `2>`, `2>>`, ...
+    Redirect { stderr: bool, append: bool },
+}
+
+/// Splits a command line into tokens. Quotes and backslashes are removed,
+/// `$NAME` is expanded outside single quotes, and `|`, `&` and `>` are
+/// operators only when unquoted and unescaped. A word that ends up empty is
 /// dropped unless it was quoted: `$unset` vanishes, `"$unset"` and `''`
-/// are empty arguments.
-pub fn tokenize(input: &str, lookup: Lookup) -> Vec<String> {
+/// are empty words.
+pub fn lex(input: &str, lookup: Lookup) -> Vec<Token> {
     let mut tokens = Vec::new();
     let mut current = String::new();
     let mut inside_single_quote = false;
@@ -16,14 +30,22 @@ pub fn tokenize(input: &str, lookup: Lookup) -> Vec<String> {
     // Whether the current word contains quotes, so it is kept even if empty.
     let mut quoted = false;
 
+    // Ends the current word, if there is one.
+    let finish = |tokens: &mut Vec<Token>, current: &mut String, quoted: &mut bool| {
+        if !current.is_empty() || *quoted {
+            tokens.push(Token::Word(std::mem::take(current)));
+        }
+        *quoted = false;
+    };
+
     let mut chars = input.chars().peekable();
 
     while let Some(c) = chars.next() {
+        let unquoted = !inside_single_quote && !inside_double_quote;
         match c {
             '\'' if !inside_double_quote => {
                 inside_single_quote = !inside_single_quote;
                 quoted = true;
-                // Note: We don't push the quote itself to the token
             }
             '"' if !inside_single_quote => {
                 inside_double_quote = !inside_double_quote;
@@ -47,11 +69,26 @@ pub fn tokenize(input: &str, lookup: Lookup) -> Vec<String> {
             '$' if !inside_single_quote => {
                 expand_variable(&mut chars, lookup, &mut current);
             }
-            ' ' if !inside_single_quote && !inside_double_quote => {
-                if !current.is_empty() || quoted {
-                    tokens.push(std::mem::take(&mut current));
-                }
-                quoted = false;
+            ' ' if unquoted => finish(&mut tokens, &mut current, &mut quoted),
+            '|' if unquoted => {
+                finish(&mut tokens, &mut current, &mut quoted);
+                tokens.push(Token::Pipe);
+            }
+            '&' if unquoted => {
+                finish(&mut tokens, &mut current, &mut quoted);
+                tokens.push(Token::Background);
+            }
+            '>' if unquoted => {
+                // A bare `1` or `2` written right before `>` names the stream.
+                let stderr = match current.as_str() {
+                    "1" | "2" if !quoted => std::mem::take(&mut current) == "2",
+                    _ => {
+                        finish(&mut tokens, &mut current, &mut quoted);
+                        false
+                    }
+                };
+                let append = chars.next_if_eq(&'>').is_some();
+                tokens.push(Token::Redirect { stderr, append });
             }
             _ => {
                 current.push(c);
@@ -59,9 +96,7 @@ pub fn tokenize(input: &str, lookup: Lookup) -> Vec<String> {
         }
     }
 
-    if !current.is_empty() || quoted {
-        tokens.push(current);
-    }
+    finish(&mut tokens, &mut current, &mut quoted);
     tokens
 }
 
@@ -144,45 +179,42 @@ pub struct Pipeline {
 
 /// Parses a command line, expanding variables with `lookup`.
 pub fn parse(line: &str, lookup: Lookup) -> Pipeline {
-    let mut stages: Vec<SimpleCommand> = line
-        .split('|')
-        .map(|segment| SimpleCommand::parse(tokenize(segment, lookup)))
-        .collect();
-    let background = stages
-        .last()
-        .and_then(|stage| stage.argv.last())
-        .is_some_and(|arg| arg == "&");
+    let mut tokens = lex(line, lookup);
+    let background = tokens.last() == Some(&Token::Background);
     if background {
-        stages.last_mut().unwrap().argv.pop();
+        tokens.pop();
     }
+
+    let mut stages = vec![SimpleCommand::default()];
+    let mut tokens = tokens.into_iter().peekable();
+    while let Some(token) = tokens.next() {
+        let stage = stages.last_mut().unwrap();
+        match token {
+            Token::Word(word) => stage.argv.push(word),
+            // `&` only means something at the end of the line.
+            Token::Background => stage.argv.push("&".to_string()),
+            Token::Pipe => stages.push(SimpleCommand::default()),
+            Token::Redirect { stderr, append } => {
+                let slot = if stderr {
+                    &mut stage.stderr
+                } else {
+                    &mut stage.stdout
+                };
+                // The last redirection of a stream wins; one with no target
+                // is dropped.
+                *slot = match tokens.next_if(|t| matches!(t, Token::Word(_))) {
+                    Some(Token::Word(path)) => Some(Target { path, append }),
+                    _ => None,
+                };
+            }
+        }
+    }
+
     let text = line.trim_end().trim_end_matches('&').trim_end().to_string();
     Pipeline {
         stages,
         background,
         text,
-    }
-}
-
-impl SimpleCommand {
-    /// Separates redirections from the command's words. The last
-    /// redirection of a stream wins; one with no target is dropped.
-    fn parse(tokens: Vec<String>) -> Self {
-        let mut command = SimpleCommand::default();
-        let mut tokens = tokens.into_iter();
-        while let Some(token) = tokens.next() {
-            let (slot, append) = match token.as_str() {
-                ">" | "1>" => (&mut command.stdout, false),
-                ">>" | "1>>" => (&mut command.stdout, true),
-                "2>" => (&mut command.stderr, false),
-                "2>>" => (&mut command.stderr, true),
-                _ => {
-                    command.argv.push(token);
-                    continue;
-                }
-            };
-            *slot = tokens.next().map(|path| Target { path, append });
-        }
-        command
     }
 }
 
@@ -194,8 +226,19 @@ mod tests {
         None
     }
 
+    /// The words of `input`, which must contain no operators.
+    fn words(input: &str, lookup: Lookup) -> Vec<String> {
+        lex(input, lookup)
+            .into_iter()
+            .map(|token| match token {
+                Token::Word(word) => word,
+                op => panic!("unexpected operator {op:?} in {input:?}"),
+            })
+            .collect()
+    }
+
     fn toks(input: &str) -> Vec<String> {
-        tokenize(input, &no_vars)
+        words(input, &no_vars)
     }
 
     fn vars(name: &str) -> Option<String> {
@@ -208,7 +251,7 @@ mod tests {
     }
 
     fn expand(input: &str) -> Vec<String> {
-        tokenize(input, &vars)
+        words(input, &vars)
     }
 
     #[test]
@@ -325,8 +368,10 @@ mod tests {
         assert_eq!(toks(r#""a\"b" "c\\d" "e\nf""#), [r#"a"b"#, r"c\d", r"e\nf"]);
     }
 
-    fn command(words: &[&str]) -> SimpleCommand {
-        SimpleCommand::parse(strings(words))
+    fn command(line: &str) -> SimpleCommand {
+        let mut pipeline = parse(line, &no_vars);
+        assert_eq!(pipeline.stages.len(), 1, "{line:?}");
+        pipeline.stages.remove(0)
     }
 
     fn target(path: &str, append: bool) -> Option<Target> {
@@ -338,7 +383,7 @@ mod tests {
 
     #[test]
     fn plain_command_has_no_redirects() {
-        let ctx = command(&["ls", "-l"]);
+        let ctx = command("ls -l");
         assert_eq!(ctx.argv, ["ls", "-l"]);
         assert_eq!((ctx.stdout, ctx.stderr), (None, None));
     }
@@ -353,28 +398,69 @@ mod tests {
             ("2>", None, target("f", false)),
             ("2>>", None, target("f", true)),
         ] {
-            let parsed = command(&["echo", "a", op, "f", "b"]);
             let expected = SimpleCommand {
                 argv: strings(&["echo", "a", "b"]),
                 stdout,
                 stderr,
             };
-            assert_eq!(parsed, expected, "operator {op}");
+            assert_eq!(command(&format!("echo a {op} f b")), expected, "{op}");
+            assert_eq!(command(&format!("echo a {op}f b")), expected, "{op}f");
         }
     }
 
     #[test]
+    fn redirect_needs_no_spaces() {
+        let parsed = command("echo hi>out 2>>err");
+        assert_eq!(parsed.argv, ["echo", "hi"]);
+        assert_eq!(parsed.stdout, target("out", false));
+        assert_eq!(parsed.stderr, target("err", true));
+    }
+
+    #[test]
+    fn only_a_bare_1_or_2_names_the_stream() {
+        // `a2` and `12` are words; the redirect is for stdout.
+        assert_eq!(command("echo a2>f").argv, ["echo", "a2"]);
+        assert_eq!(command("echo 12>f").argv, ["echo", "12"]);
+        assert_eq!(command("echo '2'>f").argv, ["echo", "2"]);
+        assert_eq!(command("echo '2'>f").stderr, None);
+    }
+
+    #[test]
     fn last_redirect_of_a_stream_wins() {
-        let parsed = command(&["x", ">", "a", "2>", "e", ">>", "b"]);
+        let parsed = command("x > a 2> e >> b");
         assert_eq!(parsed.stdout, target("b", true));
         assert_eq!(parsed.stderr, target("e", false));
     }
 
     #[test]
     fn redirect_without_target_is_dropped() {
-        let parsed = command(&["echo", "hi", ">"]);
+        let parsed = command("echo hi >");
         assert_eq!(parsed.argv, ["echo", "hi"]);
         assert_eq!(parsed.stdout, None);
+
+        // The pipe after it is not taken as the target.
+        let pipeline = parse("echo hi > | cat", &no_vars);
+        assert_eq!(pipeline.stages.len(), 2);
+        assert_eq!(pipeline.stages[0].stdout, None);
+    }
+
+    #[test]
+    fn quoted_or_escaped_operators_are_words() {
+        assert_eq!(
+            command(r#"echo ">" '|' "&" \> a\|b"#).argv,
+            ["echo", ">", "|", "&", ">", "a|b"]
+        );
+        assert_eq!(command(r#"echo "a|b" 'c>d'"#).argv, ["echo", "a|b", "c>d"]);
+        let quoted_amp = parse(r#"echo "&""#, &no_vars);
+        assert!(!quoted_amp.background);
+    }
+
+    #[test]
+    fn redirect_target_can_be_quoted() {
+        assert_eq!(
+            command(r#"echo > "my file""#).stdout,
+            target("my file", false)
+        );
     }
 
     #[test]
@@ -393,11 +479,27 @@ mod tests {
     }
 
     #[test]
+    fn empty_stages_are_kept_for_the_executor_to_reject() {
+        let pipeline = parse("ls | | cat", &no_vars);
+        assert_eq!(pipeline.stages.len(), 3);
+        assert!(pipeline.stages[1].argv.is_empty());
+    }
+
+    #[test]
     fn trailing_ampersand_means_background() {
         let pipeline = parse("sleep  5 | cat &  ", &no_vars);
         assert!(pipeline.background);
         assert_eq!(pipeline.stages[1].argv, ["cat"]);
         assert_eq!(pipeline.text, "sleep  5 | cat");
+        // Also without a space before it.
+        assert!(parse("sleep 5&", &no_vars).background);
+    }
+
+    #[test]
+    fn ampersand_elsewhere_is_a_word() {
+        let pipeline = parse("echo a & b", &no_vars);
+        assert!(!pipeline.background);
+        assert_eq!(pipeline.stages[0].argv, ["echo", "a", "&", "b"]);
     }
 
     #[test]

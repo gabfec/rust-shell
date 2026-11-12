@@ -268,3 +268,28 @@ fn cd_tilde_slash_is_relative_to_home() {
     assert_eq!(r.stdout, format!("{}\n", real.join("sub").display()));
     assert_eq!(r.stderr, "");
 }
+
+#[test]
+fn quoted_pipe_is_not_a_pipeline() {
+    let r = run("quoted-pipe", "echo \"a|b\" 'c | d' e\\|f\n");
+    assert_eq!(r.stdout, "a|b c | d e|f\n");
+    assert_eq!(r.stderr, "");
+}
+
+#[test]
+fn quoted_redirect_and_ampersand_are_words() {
+    let dir = temp_dir("quoted-redirect");
+    let r = run_in(&dir, "echo \">\" x \"&\"\n", None);
+    assert_eq!(r.stdout, "> x &\n");
+    assert!(!dir.join("x").exists());
+}
+
+#[test]
+fn redirect_without_spaces() {
+    let r = run(
+        "redir-nospace",
+        "echo hi>f\nls /no_such_path_xyz 2>>e\ncat f e\n",
+    );
+    assert!(r.stdout.starts_with("hi\nls: "), "{:?}", r.stdout);
+    assert_eq!(r.stderr, "");
+}
