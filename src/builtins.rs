@@ -6,7 +6,7 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 pub const SHELL_BUILTINS: &[&str] = &[
-    "exit", "echo", "type", "pwd", "cd", "history", "jobs", "complete",
+    "exit", "echo", "type", "pwd", "cd", "history", "jobs", "complete", "declare",
 ];
 
 pub fn is_builtin(name: &str) -> bool {
@@ -32,6 +32,7 @@ pub fn run_builtin(
         "history" => history(shell, args, out),
         "jobs" => print_jobs(&shell.jobs.reap(), true, out),
         "complete" => complete(shell, args, out, err),
+        "declare" => Ok(()),
         other => unreachable!("{other} is not a builtin"),
     };
     Flow::Continue
