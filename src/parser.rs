@@ -1,4 +1,3 @@
-use crate::builtins::is_valid_name;
 use std::fs;
 use std::fs::File;
 use std::iter::Peekable;
@@ -107,6 +106,16 @@ fn expand_variable(chars: &mut Peekable<Chars>, lookup: Lookup, out: &mut String
     } else {
         out.push_str(&lookup(&name).unwrap_or_default());
     }
+}
+
+/// Whether `name` can name a variable: a letter or `_`, followed by
+/// letters, digits or `_`.
+pub fn is_valid_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 /// Splits a command line into the stages of a pipeline.

@@ -1,4 +1,4 @@
-use crate::builtins::SHELL_BUILTINS;
+use crate::builtins;
 use crate::utils::is_executable;
 use rustyline::completion::Completer;
 use rustyline::{Context, Helper, Highlighter, Hinter, Validator};
@@ -103,7 +103,7 @@ impl ShellHelper {
         let mut matches = Vec::new();
 
         // Check Builtins
-        for builtin in SHELL_BUILTINS {
+        for builtin in builtins::names() {
             if builtin.starts_with(buffer) {
                 matches.push(builtin.to_string());
             }
