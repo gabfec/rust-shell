@@ -1,7 +1,8 @@
 use crate::builtins::{is_builtin, run_builtin};
-use crate::parser::{CommandContext, parse_pipeline};
+use crate::parser::{SimpleCommand, Target, parse};
 use crate::shell::{Flow, Shell};
 use crate::utils::find_in_path;
+use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
 use std::process::{Child, Command, Stdio};
 use std::thread;
@@ -9,15 +10,9 @@ use std::thread;
 /// Runs one command line: a single command or `A | B | ... | N`,
 /// optionally followed by `&` to run it in the background.
 pub fn run_pipeline(shell: &mut Shell, line: &str) -> Flow {
-    let mut stages = parse_pipeline(line, &|name| shell.variable(name));
-
-    let background = stages
-        .last()
-        .and_then(|stage| stage.argv.last())
-        .is_some_and(|arg| arg == "&");
-    if background {
-        stages.last_mut().unwrap().argv.pop();
-    }
+    let pipeline = parse(line, &|name| shell.variable(name));
+    // Every redirection is opened (creating its file) before anything runs.
+    let stages: Vec<Stage> = pipeline.stages.into_iter().map(Stage::open).collect();
     if stages.iter().any(|stage| stage.argv.is_empty()) {
         return Flow::Continue;
     }
@@ -54,10 +49,9 @@ pub fn run_pipeline(shell: &mut Shell, line: &str) -> Flow {
     if children.is_empty() {
         return Flow::Continue;
     }
-    if background {
+    if pipeline.background {
         let pid = children.last().unwrap().id();
-        let command = line.trim_end().trim_end_matches('&').trim_end();
-        let id = shell.jobs.add(command.to_string(), children);
+        let id = shell.jobs.add(pipeline.text, children);
         println!("[{}] {}", id, pid);
     } else {
         for mut child in children {
@@ -67,17 +61,42 @@ pub fn run_pipeline(shell: &mut Shell, line: &str) -> Flow {
     Flow::Continue
 }
 
+/// A pipeline stage ready to run, with its redirections opened.
+struct Stage {
+    argv: Vec<String>,
+    stdout: Option<File>,
+    stderr: Option<File>,
+}
+
+impl Stage {
+    /// Opens the command's redirections. One that can't be opened is
+    /// ignored, and the stream stays where it was.
+    fn open(command: SimpleCommand) -> Self {
+        Stage {
+            stdout: command.stdout.as_ref().and_then(|t| open_target(t).ok()),
+            stderr: command.stderr.as_ref().and_then(|t| open_target(t).ok()),
+            argv: command.argv,
+        }
+    }
+}
+
+/// Opens a redirection target for writing, truncating it unless appending.
+fn open_target(target: &Target) -> io::Result<File> {
+    OpenOptions::new()
+        .write(true)
+        .create(true)
+        .append(target.append)
+        .truncate(!target.append)
+        .open(&target.path)
+}
+
 /// Runs a builtin stage. Returns its flow and, for a stage in the middle of
 /// a pipeline, a pipe carrying its output.
-fn run_builtin_stage(
-    shell: &mut Shell,
-    stage: CommandContext,
-    is_last: bool,
-) -> (Flow, Option<Stdio>) {
-    let CommandContext {
+fn run_builtin_stage(shell: &mut Shell, stage: Stage, is_last: bool) -> (Flow, Option<Stdio>) {
+    let Stage {
         argv,
-        stdout_file,
-        stderr_file,
+        stdout: stdout_file,
+        stderr: stderr_file,
     } = stage;
     let mut err: Box<dyn Write> = match stderr_file {
         Some(file) => Box::new(file),
@@ -108,11 +127,11 @@ fn pipe_from_bytes(bytes: Vec<u8>) -> Option<Stdio> {
     Some(reader.into())
 }
 
-fn spawn_external(stage: CommandContext, stdin: Option<Stdio>, is_last: bool) -> Option<Child> {
-    let CommandContext {
+fn spawn_external(stage: Stage, stdin: Option<Stdio>, is_last: bool) -> Option<Child> {
+    let Stage {
         argv,
-        stdout_file,
-        stderr_file,
+        stdout: stdout_file,
+        stderr: stderr_file,
     } = stage;
     let name = &argv[0];
     if name.is_empty() || find_in_path(name).is_none() {
@@ -135,4 +154,45 @@ fn spawn_external(stage: CommandContext, stdin: Option<Stdio>, is_last: bool) ->
     }
 
     cmd.spawn().map_err(|e| eprintln!("{}: {}", name, e)).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_util::temp_dir;
+    use std::fs;
+
+    /// Writes "new" through a redirection to a file that held "old".
+    fn write_through(name: &str, append: bool) -> String {
+        let dir = temp_dir(name);
+        let path = dir.join("f");
+        fs::write(&path, "old\n").unwrap();
+        let target = Target {
+            path: path.display().to_string(),
+            append,
+        };
+        writeln!(open_target(&target).unwrap(), "new").unwrap();
+        fs::read_to_string(&path).unwrap()
+    }
+
+    #[test]
+    fn single_redirect_truncates() {
+        assert_eq!(write_through("redirect-truncate", false), "new\n");
+    }
+
+    #[test]
+    fn double_redirect_appends() {
+        assert_eq!(write_through("redirect-append", true), "old\nnew\n");
+    }
+
+    #[test]
+    fn redirect_creates_the_file() {
+        let dir = temp_dir("redirect-create");
+        let target = Target {
+            path: dir.join("new").display().to_string(),
+            append: true,
+        };
+        open_target(&target).unwrap();
+        assert!(dir.join("new").exists());
+    }
 }

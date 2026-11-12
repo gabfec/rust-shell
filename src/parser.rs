@@ -1,5 +1,3 @@
-use std::fs;
-use std::fs::File;
 use std::iter::Peekable;
 use std::str::Chars;
 
@@ -118,80 +116,79 @@ pub fn is_valid_name(name: &str) -> bool {
         && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
-/// Splits a command line into the stages of a pipeline.
-pub fn parse_pipeline(line: &str, lookup: Lookup) -> Vec<CommandContext> {
-    line.split('|')
-        .map(|segment| CommandContext::parse(tokenize(segment, lookup)))
-        .collect()
+/// Where an output stream is redirected.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Target {
+    pub path: String,
+    /// `>>` rather than `>`.
+    pub append: bool,
 }
 
-pub struct CommandContext {
+/// One command of a pipeline: its words and output redirections.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct SimpleCommand {
     pub argv: Vec<String>,
-    pub stdout_file: Option<File>,
-    pub stderr_file: Option<File>,
+    pub stdout: Option<Target>,
+    pub stderr: Option<Target>,
 }
 
-impl CommandContext {
-    pub fn parse(tokens: Vec<String>) -> Self {
-        let mut final_argv = Vec::new();
-        let mut stdout_path = None;
-        let mut stderr_path = None;
-        let mut append_stdout = false;
-        let mut append_stderr = false;
+/// A parsed command line: `A | B | ... | N`, optionally followed by `&`.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Pipeline {
+    pub stages: Vec<SimpleCommand>,
+    /// Run in the background (the line ends with `&`).
+    pub background: bool,
+    /// The line as typed, without the `&`, as `jobs` shows it.
+    pub text: String,
+}
 
-        let mut i = 0;
-        while i < tokens.len() {
-            match tokens[i].as_str() {
-                ">" | "1>" => {
-                    stdout_path = tokens.get(i + 1).cloned();
-                    append_stdout = false;
-                    i += 2;
-                }
-                ">>" | "1>>" => {
-                    stdout_path = tokens.get(i + 1).cloned();
-                    append_stdout = true;
-                    i += 2;
-                }
-                "2>" => {
-                    stderr_path = tokens.get(i + 1).cloned();
-                    append_stderr = false;
-                    i += 2;
-                }
-                "2>>" => {
-                    stderr_path = tokens.get(i + 1).cloned();
-                    append_stderr = true;
-                    i += 2;
-                }
+/// Parses a command line, expanding variables with `lookup`.
+pub fn parse(line: &str, lookup: Lookup) -> Pipeline {
+    let mut stages: Vec<SimpleCommand> = line
+        .split('|')
+        .map(|segment| SimpleCommand::parse(tokenize(segment, lookup)))
+        .collect();
+    let background = stages
+        .last()
+        .and_then(|stage| stage.argv.last())
+        .is_some_and(|arg| arg == "&");
+    if background {
+        stages.last_mut().unwrap().argv.pop();
+    }
+    let text = line.trim_end().trim_end_matches('&').trim_end().to_string();
+    Pipeline {
+        stages,
+        background,
+        text,
+    }
+}
+
+impl SimpleCommand {
+    /// Separates redirections from the command's words. The last
+    /// redirection of a stream wins; one with no target is dropped.
+    fn parse(tokens: Vec<String>) -> Self {
+        let mut command = SimpleCommand::default();
+        let mut tokens = tokens.into_iter();
+        while let Some(token) = tokens.next() {
+            let (slot, append) = match token.as_str() {
+                ">" | "1>" => (&mut command.stdout, false),
+                ">>" | "1>>" => (&mut command.stdout, true),
+                "2>" => (&mut command.stderr, false),
+                "2>>" => (&mut command.stderr, true),
                 _ => {
-                    final_argv.push(tokens[i].clone());
-                    i += 1;
+                    command.argv.push(token);
+                    continue;
                 }
-            }
+            };
+            *slot = tokens.next().map(|path| Target { path, append });
         }
-
-        let open_file = |path: String, append: bool| {
-            fs::OpenOptions::new()
-                .write(true)
-                .create(true)
-                .append(append)
-                .truncate(!append)
-                .open(path)
-                .ok()
-        };
-
-        Self {
-            argv: final_argv,
-            stdout_file: stdout_path.and_then(|p| open_file(p, append_stdout)),
-            stderr_file: stderr_path.and_then(|p| open_file(p, append_stderr)),
-        }
+        command
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_util::temp_dir;
-    use std::io::Write;
 
     fn no_vars(_: &str) -> Option<String> {
         None
@@ -328,71 +325,62 @@ mod tests {
         assert_eq!(toks(r#""a\"b" "c\\d" "e\nf""#), [r#"a"b"#, r"c\d", r"e\nf"]);
     }
 
-    #[test]
-    fn plain_command_has_no_redirects() {
-        let ctx = CommandContext::parse(strings(&["ls", "-l"]));
-        assert_eq!(ctx.argv, ["ls", "-l"]);
-        assert!(ctx.stdout_file.is_none());
-        assert!(ctx.stderr_file.is_none());
+    fn command(words: &[&str]) -> SimpleCommand {
+        SimpleCommand::parse(strings(words))
+    }
+
+    fn target(path: &str, append: bool) -> Option<Target> {
+        Some(Target {
+            path: path.into(),
+            append,
+        })
     }
 
     #[test]
-    fn redirect_words_are_removed_from_argv() {
-        let dir = temp_dir("parse-argv");
-        for op in [">", "1>", ">>", "1>>", "2>", "2>>"] {
-            let target = dir.join("f").display().to_string();
-            let ctx = CommandContext::parse(strings(&["echo", "a", op, &target, "b"]));
-            assert_eq!(ctx.argv, ["echo", "a", "b"], "operator {op}");
+    fn plain_command_has_no_redirects() {
+        let ctx = command(&["ls", "-l"]);
+        assert_eq!(ctx.argv, ["ls", "-l"]);
+        assert_eq!((ctx.stdout, ctx.stderr), (None, None));
+    }
+
+    #[test]
+    fn redirects_are_taken_out_of_argv() {
+        for (op, stdout, stderr) in [
+            (">", target("f", false), None),
+            ("1>", target("f", false), None),
+            (">>", target("f", true), None),
+            ("1>>", target("f", true), None),
+            ("2>", None, target("f", false)),
+            ("2>>", None, target("f", true)),
+        ] {
+            let parsed = command(&["echo", "a", op, "f", "b"]);
+            let expected = SimpleCommand {
+                argv: strings(&["echo", "a", "b"]),
+                stdout,
+                stderr,
+            };
+            assert_eq!(parsed, expected, "operator {op}");
         }
     }
 
     #[test]
-    fn stdout_and_stderr_targets_are_opened() {
-        let dir = temp_dir("parse-targets");
-        let out = dir.join("out").display().to_string();
-        let err = dir.join("err").display().to_string();
-
-        let ctx = CommandContext::parse(strings(&["x", "1>", &out]));
-        assert!(ctx.stdout_file.is_some() && ctx.stderr_file.is_none());
-
-        let ctx = CommandContext::parse(strings(&["x", "2>", &err]));
-        assert!(ctx.stdout_file.is_none() && ctx.stderr_file.is_some());
-    }
-
-    /// Writes "new" through a redirect `op` to a file that held "old".
-    fn redirect_into_existing(op: &str) -> String {
-        let dir = temp_dir(&format!("parse-mode-{}", op.replace('>', "gt")));
-        let path = dir.join("f");
-        fs::write(&path, "old\n").unwrap();
-        let ctx = CommandContext::parse(strings(&["x", op, path.to_str().unwrap()]));
-        let mut file = ctx.stdout_file.or(ctx.stderr_file).unwrap();
-        writeln!(file, "new").unwrap();
-        fs::read_to_string(&path).unwrap()
-    }
-
-    #[test]
-    fn single_redirect_truncates() {
-        assert_eq!(redirect_into_existing(">"), "new\n");
-        assert_eq!(redirect_into_existing("2>"), "new\n");
-    }
-
-    #[test]
-    fn double_redirect_appends() {
-        assert_eq!(redirect_into_existing(">>"), "old\nnew\n");
-        assert_eq!(redirect_into_existing("2>>"), "old\nnew\n");
+    fn last_redirect_of_a_stream_wins() {
+        let parsed = command(&["x", ">", "a", "2>", "e", ">>", "b"]);
+        assert_eq!(parsed.stdout, target("b", true));
+        assert_eq!(parsed.stderr, target("e", false));
     }
 
     #[test]
     fn redirect_without_target_is_dropped() {
-        let ctx = CommandContext::parse(strings(&["echo", "hi", ">"]));
-        assert_eq!(ctx.argv, ["echo", "hi"]);
-        assert!(ctx.stdout_file.is_none());
+        let parsed = command(&["echo", "hi", ">"]);
+        assert_eq!(parsed.argv, ["echo", "hi"]);
+        assert_eq!(parsed.stdout, None);
     }
 
     #[test]
     fn pipeline_splits_into_stages() {
-        let stages = parse_pipeline("echo a b | tr a-z A-Z|cat", &no_vars);
-        let argvs: Vec<_> = stages.iter().map(|s| s.argv.clone()).collect();
+        let pipeline = parse("echo a b | tr a-z A-Z|cat", &no_vars);
+        let argvs: Vec<_> = pipeline.stages.iter().map(|s| s.argv.clone()).collect();
         assert_eq!(
             argvs,
             [
@@ -401,5 +389,19 @@ mod tests {
                 strings(&["cat"])
             ]
         );
+        assert!(!pipeline.background);
+    }
+
+    #[test]
+    fn trailing_ampersand_means_background() {
+        let pipeline = parse("sleep  5 | cat &  ", &no_vars);
+        assert!(pipeline.background);
+        assert_eq!(pipeline.stages[1].argv, ["cat"]);
+        assert_eq!(pipeline.text, "sleep  5 | cat");
+    }
+
+    #[test]
+    fn text_is_the_line_as_typed() {
+        assert_eq!(parse("echo  'a  b'", &no_vars).text, "echo  'a  b'");
     }
 }
