@@ -31,8 +31,13 @@ fn target(arg: Option<&str>, home: &str) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
+    use super::target;
     use crate::builtins::test_util::run;
     use crate::shell::{Flow, Shell};
+    use std::path::PathBuf;
+
+    // Changing directory would affect every test in the process, so only
+    // failures run the builtin; successful `cd`s are covered by tests/cli.rs.
 
     #[test]
     fn missing_directory_is_reported_on_stderr() {
@@ -40,5 +45,21 @@ mod tests {
         assert_eq!(flow, Flow::Continue);
         assert_eq!(out, "");
         assert_eq!(err, "cd: /no/such/dir: No such file or directory\n");
+    }
+
+    #[test]
+    fn no_argument_goes_home() {
+        assert_eq!(target(None, "/home/u"), PathBuf::from("/home/u"));
+    }
+
+    #[test]
+    fn tilde_expands_to_home() {
+        assert_eq!(target(Some("~"), "/home/u"), PathBuf::from("/home/u"));
+    }
+
+    #[test]
+    fn other_paths_are_used_as_given() {
+        assert_eq!(target(Some("/tmp"), "/home/u"), PathBuf::from("/tmp"));
+        assert_eq!(target(Some("../x"), "/home/u"), PathBuf::from("../x"));
     }
 }

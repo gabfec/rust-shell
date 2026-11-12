@@ -104,3 +104,53 @@ pub mod test_util {
         (Flow::Continue, String::new(), String::new())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn table_has_no_duplicates() {
+        let mut seen: Vec<_> = names().collect();
+        seen.sort();
+        seen.dedup();
+        assert_eq!(seen.len(), BUILTINS.len());
+    }
+
+    #[test]
+    fn only_table_entries_are_builtins() {
+        assert!(names().all(is_builtin));
+        assert!(!is_builtin("ls"));
+        assert!(!is_builtin(""));
+    }
+
+    /// A writer whose every write fails, like a pipe nobody reads.
+    struct Broken;
+
+    impl Write for Broken {
+        fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+            Err(io::ErrorKind::BrokenPipe.into())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn write_errors_are_swallowed() {
+        let argv = ["echo".to_string(), "hi".to_string()];
+        let flow = run_builtin(&mut Shell::default(), &argv, &mut Broken, &mut Broken);
+        assert_eq!(flow, Flow::Continue);
+    }
+
+    #[test]
+    #[should_panic(expected = "ls is not a builtin")]
+    fn running_a_non_builtin_is_a_bug() {
+        run_builtin(
+            &mut Shell::default(),
+            &["ls".to_string()],
+            &mut Broken,
+            &mut Broken,
+        );
+    }
+}

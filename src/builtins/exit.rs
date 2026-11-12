@@ -16,5 +16,6 @@ mod tests {
     fn exits_silently() {
         let exited = (Flow::Exit, String::new(), String::new());
         assert_eq!(run(&mut Shell::default(), &["exit"]), exited);
+        assert_eq!(run(&mut Shell::default(), &["exit", "3"]), exited);
     }
 }

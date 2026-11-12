@@ -21,4 +21,9 @@ mod tests {
     fn prints_empty_line_without_arguments() {
         assert_eq!(stdout_of(&["echo"]), "\n");
     }
+
+    #[test]
+    fn keeps_empty_arguments() {
+        assert_eq!(stdout_of(&["echo", "", "x"]), " x\n");
+    }
 }

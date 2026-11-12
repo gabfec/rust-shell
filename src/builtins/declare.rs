@@ -136,4 +136,18 @@ mod tests {
         run(&mut shell, &["declare", "ok=1", "1bad=2", "fine=3"]);
         assert_eq!(shell.variables.keys().collect::<Vec<_>>(), ["fine", "ok"]);
     }
+
+    #[test]
+    fn name_without_value_is_accepted_but_not_stored() {
+        let mut shell = Shell::default();
+        assert_eq!(run(&mut shell, &["declare", "later"]), quiet());
+        assert!(shell.variables.is_empty());
+    }
+
+    #[test]
+    fn other_flags_are_ignored() {
+        let mut shell = Shell::default();
+        assert_eq!(run(&mut shell, &["declare", "-x", "a=1"]), quiet());
+        assert_eq!(shell.variables["a"], "1");
+    }
 }

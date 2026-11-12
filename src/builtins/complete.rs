@@ -127,4 +127,13 @@ mod tests {
         run(&mut shell, &["complete", "-r"]);
         assert!(shell.completions.is_empty());
     }
+
+    #[test]
+    fn c_without_script_is_an_error() {
+        let mut shell = Shell::default();
+        let (_, out, err) = run(&mut shell, &["complete", "-C"]);
+        assert_eq!(out, "");
+        assert_eq!(err, "complete: -C: option requires an argument\n");
+        assert!(shell.completions.is_empty());
+    }
 }

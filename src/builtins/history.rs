@@ -44,6 +44,12 @@ mod tests {
     }
 
     #[test]
+    fn non_numeric_count_prints_all() {
+        let mut shell = shell_with(&["a", "b"]);
+        assert_eq!(run(&mut shell, &["history", "x"]).1.lines().count(), 2);
+    }
+
+    #[test]
     fn file_flags_round_trip() {
         let dir = temp_dir("builtin-history");
         let path = dir.join("h").display().to_string();
@@ -63,6 +69,15 @@ mod tests {
     fn flag_without_path_does_nothing() {
         let mut shell = shell_with(&["a"]);
         assert_eq!(run(&mut shell, &["history", "-r"]), quiet());
+        assert_eq!(shell.history.entries(), ["a"]);
+    }
+
+    #[test]
+    fn missing_file_is_ignored() {
+        let dir = temp_dir("builtin-history-missing");
+        let path = dir.join("nope").display().to_string();
+        let mut shell = shell_with(&["a"]);
+        assert_eq!(run(&mut shell, &["history", "-r", &path]), quiet());
         assert_eq!(shell.history.entries(), ["a"]);
     }
 }
