@@ -246,3 +246,15 @@ fn environment_variables_expand_too() {
     let r = run_in(&dir, "echo $HOME\n", None);
     assert_eq!(r.stdout, format!("{}\n", dir.display()));
 }
+
+#[test]
+fn empty_expansions_drop_unquoted_words_only() {
+    let r = run(
+        "expand-empty",
+        "declare existing=value\n\
+         printf '[%s]' ${missing1}end ${existing} ${missing2} $missing3 \"$missing4\"\necho\n\
+         \"\"\n",
+    );
+    assert_eq!(r.stdout, "[end][value][]\n");
+    assert_eq!(r.stderr, ": not found\n");
+}

@@ -115,7 +115,7 @@ fn spawn_external(stage: CommandContext, stdin: Option<Stdio>, is_last: bool) ->
         stderr_file,
     } = stage;
     let name = &argv[0];
-    if find_in_path(name).is_none() {
+    if name.is_empty() || find_in_path(name).is_none() {
         eprintln!("{}: not found", name);
         return None;
     }

@@ -8,12 +8,16 @@ use std::str::Chars;
 pub type Lookup<'a> = &'a dyn Fn(&str) -> Option<String>;
 
 /// Splits a command into words, removing quotes and backslashes and
-/// expanding `$NAME` outside single quotes.
+/// expanding `$NAME` outside single quotes. A word that ends up empty is
+/// dropped unless it was quoted: `$unset` vanishes, `"$unset"` and `''`
+/// are empty arguments.
 pub fn tokenize(input: &str, lookup: Lookup) -> Vec<String> {
     let mut tokens = Vec::new();
     let mut current = String::new();
     let mut inside_single_quote = false;
     let mut inside_double_quote = false;
+    // Whether the current word contains quotes, so it is kept even if empty.
+    let mut quoted = false;
 
     let mut chars = input.chars().peekable();
 
@@ -21,10 +25,12 @@ pub fn tokenize(input: &str, lookup: Lookup) -> Vec<String> {
         match c {
             '\'' if !inside_double_quote => {
                 inside_single_quote = !inside_single_quote;
+                quoted = true;
                 // Note: We don't push the quote itself to the token
             }
             '"' if !inside_single_quote => {
                 inside_double_quote = !inside_double_quote;
+                quoted = true;
             }
             '\\' if !inside_single_quote => {
                 if let Some(&next_c) = chars.peek() {
@@ -45,10 +51,10 @@ pub fn tokenize(input: &str, lookup: Lookup) -> Vec<String> {
                 expand_variable(&mut chars, lookup, &mut current);
             }
             ' ' if !inside_single_quote && !inside_double_quote => {
-                if !current.is_empty() {
-                    tokens.push(current.clone());
-                    current.clear();
+                if !current.is_empty() || quoted {
+                    tokens.push(std::mem::take(&mut current));
                 }
+                quoted = false;
             }
             _ => {
                 current.push(c);
@@ -56,7 +62,7 @@ pub fn tokenize(input: &str, lookup: Lookup) -> Vec<String> {
         }
     }
 
-    if !current.is_empty() {
+    if !current.is_empty() || quoted {
         tokens.push(current);
     }
     tokens
@@ -228,6 +234,24 @@ mod tests {
         assert_eq!(expand("a ${Item"), ["a", "${Item"]);
         assert_eq!(expand("${1x} ${}"), ["${1x}", "${}"]);
         assert_eq!(expand(r#""${Foo1 x}""#), ["${Foo1 x}"]);
+    }
+
+    #[test]
+    fn unquoted_empty_expansion_is_dropped() {
+        assert_eq!(
+            expand("x ${missing1}end ${Item} ${missing2} $missing3"),
+            ["x", "end", "widget"]
+        );
+    }
+
+    #[test]
+    fn quoted_empty_words_are_kept() {
+        assert_eq!(
+            expand(r#"x "" '' "$missing" "${missing}""#),
+            ["x", "", "", "", ""]
+        );
+        // Quotes inside a word that has other text don't add anything.
+        assert_eq!(expand(r#"a"" ''b"#), ["a", "b"]);
     }
 
     #[test]
