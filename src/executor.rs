@@ -9,7 +9,7 @@ use std::thread;
 /// Runs one command line: a single command or `A | B | ... | N`,
 /// optionally followed by `&` to run it in the background.
 pub fn run_pipeline(shell: &mut Shell, line: &str) -> Flow {
-    let mut stages = parse_pipeline(line);
+    let mut stages = parse_pipeline(line, &|name| shell.variable(name));
 
     let background = stages
         .last()

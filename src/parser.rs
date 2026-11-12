@@ -1,7 +1,14 @@
 use std::fs;
 use std::fs::File;
+use std::iter::Peekable;
+use std::str::Chars;
 
-pub fn tokenize(input: &str) -> Vec<String> {
+/// Looks up a variable's value for `$NAME` expansion.
+pub type Lookup<'a> = &'a dyn Fn(&str) -> Option<String>;
+
+/// Splits a command into words, removing quotes and backslashes and
+/// expanding `$NAME` outside single quotes.
+pub fn tokenize(input: &str, lookup: Lookup) -> Vec<String> {
     let mut tokens = Vec::new();
     let mut current = String::new();
     let mut inside_single_quote = false;
@@ -33,6 +40,9 @@ pub fn tokenize(input: &str) -> Vec<String> {
                     }
                 }
             }
+            '$' if !inside_single_quote => {
+                expand_variable(&mut chars, lookup, &mut current);
+            }
             ' ' if !inside_single_quote && !inside_double_quote => {
                 if !current.is_empty() {
                     tokens.push(current.clone());
@@ -51,10 +61,29 @@ pub fn tokenize(input: &str) -> Vec<String> {
     tokens
 }
 
+/// Expands the variable reference following a `$` into `out`. A `$` not
+/// followed by a name is kept literally.
+fn expand_variable(chars: &mut Peekable<Chars>, lookup: Lookup, out: &mut String) {
+    let mut name = String::new();
+    if chars
+        .peek()
+        .is_some_and(|c| c.is_ascii_alphabetic() || *c == '_')
+    {
+        while let Some(c) = chars.next_if(|c| c.is_ascii_alphanumeric() || *c == '_') {
+            name.push(c);
+        }
+    }
+    if name.is_empty() {
+        out.push('$');
+    } else {
+        out.push_str(&lookup(&name).unwrap_or_default());
+    }
+}
+
 /// Splits a command line into the stages of a pipeline.
-pub fn parse_pipeline(line: &str) -> Vec<CommandContext> {
+pub fn parse_pipeline(line: &str, lookup: Lookup) -> Vec<CommandContext> {
     line.split('|')
-        .map(|segment| CommandContext::parse(tokenize(segment)))
+        .map(|segment| CommandContext::parse(tokenize(segment, lookup)))
         .collect()
 }
 
@@ -126,8 +155,60 @@ mod tests {
     use crate::test_util::temp_dir;
     use std::io::Write;
 
+    fn no_vars(_: &str) -> Option<String> {
+        None
+    }
+
     fn toks(input: &str) -> Vec<String> {
-        tokenize(input)
+        tokenize(input, &no_vars)
+    }
+
+    fn vars(name: &str) -> Option<String> {
+        match name {
+            "Item" => Some("widget".into()),
+            "Foo1" => Some("Bar2".into()),
+            "spaced" => Some("a  b".into()),
+            _ => None,
+        }
+    }
+
+    fn expand(input: &str) -> Vec<String> {
+        tokenize(input, &vars)
+    }
+
+    #[test]
+    fn dollar_name_expands() {
+        assert_eq!(expand("echo $Item $Foo1"), ["echo", "widget", "Bar2"]);
+    }
+
+    #[test]
+    fn name_ends_at_first_non_name_char() {
+        assert_eq!(
+            expand("$Item.txt pre_$Foo1-x"),
+            ["widget.txt", "pre_Bar2-x"]
+        );
+        // `_` and digits belong to the name, so this is the unset `Item_1`.
+        assert_eq!(expand("a$Item_1"), ["a"]);
+    }
+
+    #[test]
+    fn unset_variable_is_empty() {
+        assert_eq!(expand("echo $missing x"), ["echo", "x"]);
+    }
+
+    #[test]
+    fn expands_in_double_quotes_but_not_single() {
+        assert_eq!(expand(r#""$Item" '$Item'"#), ["widget", "$Item"]);
+        // Quoted expansions keep their spaces in one word.
+        assert_eq!(expand(r#""<$spaced>""#), ["<a  b>"]);
+    }
+
+    #[test]
+    fn escaped_or_lone_dollar_is_literal() {
+        assert_eq!(
+            expand(r#"\$Item "\$Item" $ a$ $1 $-"#),
+            ["$Item", "$Item", "$", "a$", "$1", "$-"]
+        );
     }
 
     fn strings(words: &[&str]) -> Vec<String> {
@@ -238,7 +319,7 @@ mod tests {
 
     #[test]
     fn pipeline_splits_into_stages() {
-        let stages = parse_pipeline("echo a b | tr a-z A-Z|cat");
+        let stages = parse_pipeline("echo a b | tr a-z A-Z|cat", &no_vars);
         let argvs: Vec<_> = stages.iter().map(|s| s.argv.clone()).collect();
         assert_eq!(
             argvs,

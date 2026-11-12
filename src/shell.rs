@@ -2,7 +2,7 @@ use crate::executor::run_pipeline;
 use crate::history::History;
 use crate::jobs::{JobTable, print_jobs};
 use std::collections::BTreeMap;
-use std::io;
+use std::{env, io};
 
 /// Whether the REPL should keep going after a command.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -27,6 +27,14 @@ impl Shell {
     pub fn run(&mut self, line: &str) -> Flow {
         self.history.push(line);
         run_pipeline(self, line)
+    }
+
+    /// The value of a shell variable, falling back to the environment.
+    pub fn variable(&self, name: &str) -> Option<String> {
+        self.variables
+            .get(name)
+            .cloned()
+            .or_else(|| env::var(name).ok())
     }
 
     /// Prints (and forgets) background jobs that finished since last time.

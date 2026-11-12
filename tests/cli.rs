@@ -227,3 +227,22 @@ fn complete_r_unregisters() {
     assert_eq!(r.stdout, "");
     assert_eq!(r.stderr, "complete: git: no completion specification\n");
 }
+
+#[test]
+fn declared_variables_expand_in_arguments() {
+    let r = run(
+        "expand",
+        "declare Variable_1=Value_1\ndeclare Variable_2=Value2\n\
+         printf '[%s]' $Variable_1 raw_$Variable_2 '$Variable_1' \"$Variable_2\"\necho\n",
+    );
+    assert_eq!(r.stdout, "[Value_1][raw_Value2][$Variable_1][Value2]\n");
+}
+
+#[test]
+fn environment_variables_expand_too() {
+    let r = run("expand-env", "echo $HOME_SET_BY_TEST\n");
+    assert_eq!(r.stdout, "\n");
+    let dir = temp_dir("expand-env-home");
+    let r = run_in(&dir, "echo $HOME\n", None);
+    assert_eq!(r.stdout, format!("{}\n", dir.display()));
+}
