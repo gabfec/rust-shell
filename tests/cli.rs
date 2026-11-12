@@ -258,3 +258,13 @@ fn empty_expansions_drop_unquoted_words_only() {
     assert_eq!(r.stdout, "[end][value][]\n");
     assert_eq!(r.stderr, ": not found\n");
 }
+
+#[test]
+fn cd_tilde_slash_is_relative_to_home() {
+    let dir = temp_dir("cd-tilde");
+    fs::create_dir(dir.join("sub")).unwrap();
+    let r = run_in(&dir, "cd /\ncd ~/sub\npwd\n", None);
+    let real = dir.canonicalize().unwrap();
+    assert_eq!(r.stdout, format!("{}\n", real.join("sub").display()));
+    assert_eq!(r.stderr, "");
+}

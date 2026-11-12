@@ -23,7 +23,7 @@ fn target(arg: Option<&str>, home: &str) -> PathBuf {
     match arg {
         None => PathBuf::from(home),
         Some(arg) => match arg.strip_prefix('~') {
-            Some(rest) => Path::new(home).join(rest),
+            Some(rest) => Path::new(home).join(rest.trim_start_matches('/')),
             None => PathBuf::from(arg),
         },
     }
@@ -55,6 +55,11 @@ mod tests {
     #[test]
     fn tilde_expands_to_home() {
         assert_eq!(target(Some("~"), "/home/u"), PathBuf::from("/home/u"));
+        assert_eq!(target(Some("~/"), "/home/u"), PathBuf::from("/home/u"));
+        assert_eq!(
+            target(Some("~/src"), "/home/u"),
+            PathBuf::from("/home/u/src")
+        );
     }
 
     #[test]
