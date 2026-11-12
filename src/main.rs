@@ -19,7 +19,7 @@ use std::env;
 
 fn main() -> rustyline::Result<()> {
     let mut rl: Editor<ShellHelper, DefaultHistory> = Editor::new()?;
-    rl.set_helper(Some(ShellHelper));
+    rl.set_helper(Some(ShellHelper::default()));
     // Only complete up to the common prefix, then list the candidates.
     rl.set_completion_type(CompletionType::List);
 
@@ -40,6 +40,10 @@ fn main() -> rustyline::Result<()> {
         editor_history_len = shell.history.entries().len();
 
         shell.report_finished_jobs();
+
+        if let Some(helper) = rl.helper_mut() {
+            helper.completers = shell.completions.clone();
+        }
 
         match rl.readline("$ ") {
             Ok(line) => {

@@ -2,11 +2,16 @@ use crate::builtins::SHELL_BUILTINS;
 use crate::utils::is_executable;
 use rustyline::completion::Completer;
 use rustyline::{Context, Helper, Highlighter, Hinter, Validator};
+use std::collections::BTreeMap;
 use std::env;
 use std::fs;
+use std::process::{Command, Stdio};
 
-#[derive(Helper, Hinter, Highlighter, Validator)]
-pub struct ShellHelper;
+#[derive(Default, Helper, Hinter, Highlighter, Validator)]
+pub struct ShellHelper {
+    /// Completer scripts registered with `complete -C`, by command name.
+    pub completers: BTreeMap<String, String>,
+}
 
 impl Completer for ShellHelper {
     type Candidate = String;
@@ -17,15 +22,30 @@ impl Completer for ShellHelper {
         pos: usize,
         _ctx: &Context<'_>,
     ) -> rustyline::Result<(usize, Vec<String>)> {
-        let buffer = &line[..pos];
+        Ok(self.complete_buffer(&line[..pos]))
+    }
+}
 
-        // If there's a space, we're completing a filename argument
+impl ShellHelper {
+    /// Completes the text before the cursor. Returns where the replaced
+    /// word starts and the candidates for it.
+    fn complete_buffer(&self, buffer: &str) -> (usize, Vec<String>) {
+        // If there's a space, we're completing an argument
         if let Some(last_space) = buffer.rfind(' ') {
             let prefix = &buffer[last_space + 1..];
             let start = last_space + 1;
 
+            let command = buffer.split_whitespace().next().unwrap_or_default();
+            if let Some(script) = self.completers.get(command) {
+                return (start, run_completer(script));
+            }
+
             let (dir, file_prefix, dir_prefix) = if let Some(slash) = prefix.rfind('/') {
-                (&prefix[..slash + 1], &prefix[slash + 1..], &prefix[..slash + 1])
+                (
+                    &prefix[..slash + 1],
+                    &prefix[slash + 1..],
+                    &prefix[..slash + 1],
+                )
             } else {
                 (".", prefix, "")
             };
@@ -44,7 +64,7 @@ impl Completer for ShellHelper {
 
             matches.sort();
 
-            return Ok((start, matches));
+            return (start, matches);
         }
 
         // No space: complete command (builtins + PATH)
@@ -74,7 +94,7 @@ impl Completer for ShellHelper {
         }
 
         if matches.is_empty() {
-            return Ok((0, Vec::new()));
+            return (0, Vec::new());
         }
 
         matches.sort();
@@ -84,11 +104,73 @@ impl Completer for ShellHelper {
             // Single unique match -> Append space
             let mut completion = matches[0].clone();
             completion.push(' ');
-            Ok((0, vec![completion]))
+            (0, vec![completion])
         } else {
             // Multiple matches -> Find Longest Common Prefix (LCP)
             // Let Rustyline handle the LCP and the Bell
-            Ok((0, matches))
+            (0, matches)
         }
+    }
+}
+
+/// Runs a `complete -C` script and turns each line it prints into a
+/// candidate. A single candidate gets a trailing space, like a finished word.
+fn run_completer(script: &str) -> Vec<String> {
+    let Ok(output) = Command::new(script)
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+    else {
+        return Vec::new();
+    };
+    let mut candidates: Vec<String> = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(String::from)
+        .collect();
+    if let [single] = candidates.as_mut_slice() {
+        single.push(' ');
+    }
+    candidates
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_util::temp_dir;
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::Path;
+
+    /// Writes an executable shell script and returns its path.
+    fn script(dir: &Path, name: &str, body: &str) -> String {
+        let path = dir.join(name);
+        fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        path.display().to_string()
+    }
+
+    fn helper_with(command: &str, script: String) -> ShellHelper {
+        ShellHelper {
+            completers: BTreeMap::from([(command.to_string(), script)]),
+        }
+    }
+
+    #[test]
+    fn registered_completer_supplies_a_single_word() {
+        let dir = temp_dir("complete-single");
+        let helper = helper_with("git", script(&dir, "c", "echo add"));
+        assert_eq!(
+            helper.complete_buffer("git "),
+            (4, vec!["add ".to_string()])
+        );
+    }
+
+    #[test]
+    fn completer_is_only_used_for_its_command() {
+        let dir = temp_dir("complete-other");
+        let helper = helper_with("git", script(&dir, "c", "echo add"));
+        assert_ne!(
+            helper.complete_buffer("docker "),
+            (7, vec!["add ".to_string()])
+        );
     }
 }
