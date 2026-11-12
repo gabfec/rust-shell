@@ -1,3 +1,4 @@
+use crate::builtins::is_valid_name;
 use std::fs;
 use std::fs::File;
 use std::iter::Peekable;
@@ -61,9 +62,31 @@ pub fn tokenize(input: &str, lookup: Lookup) -> Vec<String> {
     tokens
 }
 
-/// Expands the variable reference following a `$` into `out`. A `$` not
-/// followed by a name is kept literally.
+/// Expands the variable reference following a `$` (`NAME` or `{NAME}`)
+/// into `out`. A `$` not followed by either is kept literally, as is a
+/// `${...}` that is unterminated or doesn't hold a valid name.
 fn expand_variable(chars: &mut Peekable<Chars>, lookup: Lookup, out: &mut String) {
+    if chars.next_if_eq(&'{').is_some() {
+        let mut inner = String::new();
+        let closed = loop {
+            match chars.next() {
+                Some('}') => break true,
+                Some(c) => inner.push(c),
+                None => break false,
+            }
+        };
+        if closed && is_valid_name(&inner) {
+            out.push_str(&lookup(&inner).unwrap_or_default());
+        } else {
+            out.push_str("${");
+            out.push_str(&inner);
+            if closed {
+                out.push('}');
+            }
+        }
+        return;
+    }
+
     let mut name = String::new();
     if chars
         .peek()
@@ -189,6 +212,22 @@ mod tests {
         );
         // `_` and digits belong to the name, so this is the unset `Item_1`.
         assert_eq!(expand("a$Item_1"), ["a"]);
+    }
+
+    #[test]
+    fn braced_name_expands_and_can_be_followed_by_name_chars() {
+        assert_eq!(
+            expand("stock_${Item}_id ${Foo1}"),
+            ["stock_widget_id", "Bar2"]
+        );
+        assert_eq!(expand(r#""${Item}s" '${Item}'"#), ["widgets", "${Item}"]);
+    }
+
+    #[test]
+    fn malformed_braces_stay_literal() {
+        assert_eq!(expand("a ${Item"), ["a", "${Item"]);
+        assert_eq!(expand("${1x} ${}"), ["${1x}", "${}"]);
+        assert_eq!(expand(r#""${Foo1 x}""#), ["${Foo1 x}"]);
     }
 
     #[test]
