@@ -113,8 +113,11 @@ impl ShellHelper {
     }
 }
 
-/// Runs a `complete -C` script and turns each line it prints into a
-/// candidate. A single candidate gets a trailing space, like a finished word.
+/// Runs a `complete -C` script and turns each non-blank line it prints into
+/// a candidate. A single candidate gets a trailing space, like a finished
+/// word. No candidates (including a script that fails to run) means
+/// rustyline rings the bell and leaves the line alone; there is
+/// deliberately no fallback to filename completion.
 fn run_completer(script: &str) -> Vec<String> {
     let Ok(output) = Command::new(script)
         .stdin(Stdio::null())
@@ -125,6 +128,7 @@ fn run_completer(script: &str) -> Vec<String> {
     };
     let mut candidates: Vec<String> = String::from_utf8_lossy(&output.stdout)
         .lines()
+        .filter(|line| !line.trim().is_empty())
         .map(String::from)
         .collect();
     if let [single] = candidates.as_mut_slice() {
@@ -162,6 +166,30 @@ mod tests {
             helper.complete_buffer("git "),
             (4, vec!["add ".to_string()])
         );
+    }
+
+    #[test]
+    fn empty_completer_output_gives_no_candidates() {
+        let dir = temp_dir("complete-empty");
+        fs::write(dir.join("somefile"), "").unwrap();
+        let helper = helper_with("git", script(&dir, "c", "exit 0"));
+        assert_eq!(helper.complete_buffer("git x"), (4, vec![]));
+    }
+
+    #[test]
+    fn blank_lines_are_not_candidates() {
+        let dir = temp_dir("complete-blank");
+        let helper = helper_with("git", script(&dir, "c", "echo; echo push; echo '  '"));
+        assert_eq!(
+            helper.complete_buffer("git "),
+            (4, vec!["push ".to_string()])
+        );
+    }
+
+    #[test]
+    fn missing_completer_gives_no_candidates() {
+        let helper = helper_with("git", "/no/such/completer".to_string());
+        assert_eq!(helper.complete_buffer("git "), (4, vec![]));
     }
 
     #[test]
