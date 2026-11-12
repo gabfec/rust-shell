@@ -31,7 +31,7 @@ pub fn run_builtin(
         "cd" => cd(args, err),
         "history" => history(shell, args, out),
         "jobs" => print_jobs(&shell.jobs.reap(), true, out),
-        "complete" => Ok(()),
+        "complete" => complete(args, err),
         other => unreachable!("{other} is not a builtin"),
     };
     Flow::Continue
@@ -70,6 +70,15 @@ fn cd(args: &[String], err: &mut dyn Write) -> io::Result<()> {
     if env::set_current_dir(&path).is_err() {
         let display_path = args.first().map_or("~", String::as_str);
         writeln!(err, "cd: {}: No such file or directory", display_path)?;
+    }
+    Ok(())
+}
+
+fn complete(args: &[String], err: &mut dyn Write) -> io::Result<()> {
+    if let [flag, name, ..] = args
+        && flag == "-p"
+    {
+        writeln!(err, "complete: {}: no completion specification", name)?;
     }
     Ok(())
 }
@@ -205,6 +214,13 @@ mod tests {
             (Flow::Continue, String::new(), String::new())
         );
         assert_eq!(shell.history.entries(), ["a"]);
+    }
+
+    #[test]
+    fn complete_p_reports_missing_specification() {
+        let (_, out, err) = run(&mut Shell::default(), &["complete", "-p", "git"]);
+        assert_eq!(out, "");
+        assert_eq!(err, "complete: git: no completion specification\n");
     }
 
     #[test]
