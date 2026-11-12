@@ -143,6 +143,10 @@ fn run_completer(script: &str, args: &[&str; 3], line: &str, pos: usize) -> Vec<
         .filter(|line| !line.trim().is_empty())
         .map(String::from)
         .collect();
+    // Several candidates: rustyline completes their common prefix, or rings
+    // the bell and lists them (in this order) on the next TAB.
+    candidates.sort();
+    candidates.dedup();
     if let [single] = candidates.as_mut_slice() {
         single.push(' ');
     }
@@ -228,6 +232,16 @@ mod tests {
             helper.complete_at("git st --all", 6),
             (4, vec!["[git st --all|6] ".to_string()])
         );
+    }
+
+    #[test]
+    fn multiple_candidates_are_sorted_without_trailing_space() {
+        let dir = temp_dir("complete-multi");
+        let helper = helper_with(
+            "git",
+            script(&dir, "c", "printf 'push\\nadd\\ncommit\\nadd\\n'"),
+        );
+        assert_eq!(helper.complete_buffer("git ").1, ["add", "commit", "push"]);
     }
 
     #[test]
