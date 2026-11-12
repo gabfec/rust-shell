@@ -18,6 +18,8 @@ pub struct Shell {
     pub jobs: JobTable,
     /// Completer scripts registered with `complete -C`, by command name.
     pub completions: BTreeMap<String, String>,
+    /// Shell variables set with `declare`.
+    pub variables: BTreeMap<String, String>,
 }
 
 impl Shell {

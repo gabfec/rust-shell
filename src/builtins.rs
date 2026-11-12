@@ -32,7 +32,7 @@ pub fn run_builtin(
         "history" => history(shell, args, out),
         "jobs" => print_jobs(&shell.jobs.reap(), true, out),
         "complete" => complete(shell, args, out, err),
-        "declare" => declare(args, err),
+        "declare" => declare(shell, args, out, err),
         other => unreachable!("{other} is not a builtin"),
     };
     Flow::Continue
@@ -135,16 +135,53 @@ fn print_completion(name: &str, script: &str, out: &mut dyn Write) -> io::Result
     writeln!(out, "complete -C '{}' {}", quoted, name)
 }
 
-/// `declare -p <name>...` prints variables.
-fn declare(args: &[String], err: &mut dyn Write) -> io::Result<()> {
-    if let [flag, names @ ..] = args
-        && flag == "-p"
-    {
-        for name in names {
-            writeln!(err, "declare: {}: not found", name)?;
+/// `declare <name>=<value>...` sets variables, and
+/// `declare -p [<name>...]` prints them (all of them without names).
+fn declare(
+    shell: &mut Shell,
+    args: &[String],
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> io::Result<()> {
+    let print = args.iter().any(|arg| arg == "-p");
+    // Other attribute flags (-i, -x, ...) are not supported and ignored.
+    let words = args.iter().filter(|arg| !arg.starts_with('-'));
+
+    if print {
+        let mut words = words.peekable();
+        if words.peek().is_none() {
+            for (name, value) in &shell.variables {
+                print_variable(name, value, out)?;
+            }
+        }
+        for name in words {
+            match shell.variables.get(name) {
+                Some(value) => print_variable(name, value, out)?,
+                None => writeln!(err, "declare: {}: not found", name)?,
+            }
+        }
+        return Ok(());
+    }
+
+    for word in words {
+        if let Some((name, value)) = word.split_once('=') {
+            shell.variables.insert(name.to_string(), value.to_string());
         }
     }
     Ok(())
+}
+
+/// Prints a variable the way bash's `declare -p` does, escaping the
+/// characters that are special inside double quotes.
+fn print_variable(name: &str, value: &str, out: &mut dyn Write) -> io::Result<()> {
+    let mut escaped = String::with_capacity(value.len());
+    for c in value.chars() {
+        if matches!(c, '\\' | '"' | '$' | '`') {
+            escaped.push('\\');
+        }
+        escaped.push(c);
+    }
+    writeln!(out, "declare -- {}=\"{}\"", name, escaped)
 }
 
 fn history(shell: &mut Shell, args: &[String], out: &mut dyn Write) -> io::Result<()> {
@@ -348,6 +385,58 @@ mod tests {
         let (_, out, err) = run(&mut Shell::default(), &["declare", "-p", "missing"]);
         assert_eq!(out, "");
         assert_eq!(err, "declare: missing: not found\n");
+    }
+
+    #[test]
+    fn declare_sets_and_overwrites_variables() {
+        let mut shell = Shell::default();
+        let quiet = (Flow::Continue, String::new(), String::new());
+        assert_eq!(run(&mut shell, &["declare", "foo=bar", "empty="]), quiet);
+        assert_eq!(
+            run(&mut shell, &["declare", "-p", "foo"]).1,
+            "declare -- foo=\"bar\"\n"
+        );
+        assert_eq!(
+            run(&mut shell, &["declare", "-p", "empty"]).1,
+            "declare -- empty=\"\"\n"
+        );
+
+        run(&mut shell, &["declare", "foo=bar2"]);
+        assert_eq!(
+            run(&mut shell, &["declare", "-p", "foo"]).1,
+            "declare -- foo=\"bar2\"\n"
+        );
+        assert_eq!(
+            run(&mut shell, &["declare", "-p", "missing"]).2,
+            "declare: missing: not found\n"
+        );
+    }
+
+    #[test]
+    fn declare_value_keeps_later_equals_signs() {
+        let mut shell = Shell::default();
+        run(&mut shell, &["declare", "url=a=b=c"]);
+        assert_eq!(shell.variables["url"], "a=b=c");
+    }
+
+    #[test]
+    fn declare_p_escapes_like_bash() {
+        let mut shell = Shell::default();
+        run(&mut shell, &["declare", r#"v=a"b\c$d`e f"#]);
+        assert_eq!(
+            run(&mut shell, &["declare", "-p", "v"]).1,
+            "declare -- v=\"a\\\"b\\\\c\\$d\\`e f\"\n"
+        );
+    }
+
+    #[test]
+    fn declare_p_without_names_prints_all_sorted() {
+        let mut shell = Shell::default();
+        run(&mut shell, &["declare", "b=2", "a=1"]);
+        assert_eq!(
+            run(&mut shell, &["declare", "-p"]).1,
+            "declare -- a=\"1\"\ndeclare -- b=\"2\"\n"
+        );
     }
 
     #[test]
